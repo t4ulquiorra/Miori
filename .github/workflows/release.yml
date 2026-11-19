@@ -57,10 +57,10 @@ jobs:
       - name: Configure Environment & Secrets
         run: |
           touch local.properties
-          [ -n "${{ secrets.LASTFM_API_KEY }}" ] && echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" >> local.properties
-          [ -n "${{ secrets.LASTFM_SECRET }}" ] && echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
-          [ -n "${{ secrets.LISTEN_TOGETHER_SERVER }}" ] && echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties
-          [ -n "${{ secrets.ADDON_AUTH_SERVER }}" ] && echo "ADDON_AUTH_SERVER=${{ secrets.ADDON_AUTH_SERVER }}" >> local.properties
+          if [ -n "${{ secrets.LASTFM_API_KEY }}" ]; then echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" >> local.properties; fi
+          if [ -n "${{ secrets.LASTFM_SECRET }}" ]; then echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties; fi
+          if [ -n "${{ secrets.LISTEN_TOGETHER_SERVER }}" ]; then echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties; fi
+          if [ -n "${{ secrets.ADDON_AUTH_SERVER }}" ]; then echo "ADDON_AUTH_SERVER=${{ secrets.ADDON_AUTH_SERVER }}" >> local.properties; fi
 
       - name: Configure Keystore (Production or Fallback)
         id: keystore
@@ -164,8 +164,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           EXTRA_FLAGS=""
-          [ "${{ inputs.is_draft }}" = "true" ] && EXTRA_FLAGS="$EXTRA_FLAGS --draft"
-          [ "${{ inputs.is_prerelease }}" = "true" ] && EXTRA_FLAGS="$EXTRA_FLAGS --prerelease"
+          if [ "${{ inputs.is_draft }}" = "true" ]; then EXTRA_FLAGS="$EXTRA_FLAGS --draft"; fi
+          if [ "${{ inputs.is_prerelease }}" = "true" ]; then EXTRA_FLAGS="$EXTRA_FLAGS --prerelease"; fi
 
           INTRO=$(cat release-intro.md)
 
