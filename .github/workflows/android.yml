@@ -1,8 +1,6 @@
 name: Android Release APK
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -18,21 +16,36 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: gradle
+
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
 
     - name: Setup Secrets (Keystore & local.properties)
       run: |
-        echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
-        echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
-        echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties
+        touch local.properties
+        [ -n "${{ secrets.LASTFM_API_KEY }}" ] && echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" >> local.properties
+        [ -n "${{ secrets.LASTFM_SECRET }}" ] && echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
+        [ -n "${{ secrets.LISTEN_TOGETHER_SERVER }}" ] && echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties
 
-        echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > bitchord-release.jks
-        {
-          echo "storeFile=bitchord-release.jks"
-          echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}"
-          echo "keyAlias=${{ secrets.KEY_ALIAS }}"
-          echo "keyPassword=${{ secrets.KEY_PASSWORD }}"
-        } > keystore.properties
+        if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.jks
+          cat << EOF > keystore.properties
+        storeFile=release.jks
+        storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+        keyAlias=${{ secrets.KEY_ALIAS }}
+        keyPassword=${{ secrets.KEY_PASSWORD }}
+        EOF
+        else
+          echo "::warning::Using temporary self-signed keystore fallback"
+          keytool -genkeypair -v -keystore release.jks -alias miori -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android -dname "CN=Miori, OU=Music, O=Miori, L=City, ST=State, C=US"
+          cat << EOF > keystore.properties
+        storeFile=release.jks
+        storePassword=android
+        keyAlias=miori
+        keyPassword=android
+        EOF
+        fi
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
@@ -43,14 +56,15 @@ jobs:
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: bitchord-prod-release-signed
+        name: miori-prod-release-signed
         path: app/build/outputs/apk/prod/release/*.apk
 
-    # Built by the same assembleProdRelease, with the same key. The watch app
-    # only pairs with a phone app signed by the same key, so a prod watch APK
-    # for these phone builds can only come from here, never a local build.
     - name: Upload Wear OS APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: bitchord-wear-prod-release-signed
+        name: miori-wear-prod-release-signed
         path: wearos/build/outputs/apk/prod/release/*.apk
+
+    - name: Secure Cleanup
+      if: always()
+      run: rm -f release.jks keystore.properties local.properties
