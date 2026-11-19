@@ -73,12 +73,8 @@ jobs:
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "::notice title=Keystore::Using production release keystore from GitHub Secrets."
             echo "$KEYSTORE_BASE64" | base64 -d > release.jks
-            cat << EOF > keystore.properties
-          storeFile=release.jks
-          storePassword=$KEYSTORE_PASSWORD
-          keyAlias=$KEY_ALIAS
-          keyPassword=$KEY_PASSWORD
-          EOF
+            printf 'storeFile=release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > keystore.properties
           else
             echo "::warning title=Fallback Keystore::KEYSTORE_BASE64 secret is not configured. Generating temporary self-signed keystore so release build succeeds."
             echo "::add-mask::miorifallbackpass"
@@ -91,12 +87,8 @@ jobs:
               -storepass miorifallbackpass \
               -keypass miorifallbackpass \
               -dname "CN=Miori Fallback CI, OU=CI, O=Miori, L=Unknown, ST=Unknown, C=US"
-            cat << EOF > keystore.properties
-          storeFile=release.jks
-          storePassword=miorifallbackpass
-          keyAlias=miori-ci-fallback
-          keyPassword=miorifallbackpass
-          EOF
+            printf 'storeFile=release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+              "miorifallbackpass" "miori-ci-fallback" "miorifallbackpass" > keystore.properties
           fi
 
       - name: Build Production Release APKs
