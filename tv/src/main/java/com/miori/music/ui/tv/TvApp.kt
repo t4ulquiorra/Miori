@@ -566,7 +566,7 @@ private fun TvTopBar(
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .height(21.dp)
-                .aspectRatio(1f),
+                .aspectRatio(732f / 440f),
         )
         TvAvatarButton(
             imageUrl = if (signedIn) avatarUrl else null,

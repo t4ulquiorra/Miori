@@ -115,5 +115,5 @@ fun AmbientPlayer(np: NowPlaying, ambient: Ambient) {
     }
 }
 
-/** ic_logo's viewport, 108 x 108 — as the phone's Home draws it. */
-private const val LOGO_ASPECT = 1f
+/** ic_logo's viewport, 732 x 440 (~1.67:1) — as the phone's Home draws it. */
+private const val LOGO_ASPECT = 732f / 440f

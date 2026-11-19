@@ -501,8 +501,8 @@ private fun HomeTitle(
 /** The wordmark's height against the heading's font size. */
 private const val LOGO_TO_FONT = 0.9f
 
-/** ic_logo's viewport, 1:1 square. */
-private const val LOGO_ASPECT = 1f
+/** ic_logo's viewport, 732 x 440 (~1.67:1). */
+private const val LOGO_ASPECT = 732f / 440f
 
 /**
  * Shared by the home feed, Explore and Library so headings line up across tabs.
