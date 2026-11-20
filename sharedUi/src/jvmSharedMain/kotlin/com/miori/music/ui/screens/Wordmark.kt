@@ -12,8 +12,8 @@ import androidx.compose.ui.unit.dp
 import com.miori.music.sharedui.resources.*
 import org.jetbrains.compose.resources.painterResource
 
-/** ic_logo's viewport, 730 x 484. */
-private const val WORDMARK_ASPECT = 730f / 484f
+/** ic_logo's viewport, 732 x 440. */
+private const val WORDMARK_ASPECT = 732f / 440f
 
 /**
  * The app's mark.

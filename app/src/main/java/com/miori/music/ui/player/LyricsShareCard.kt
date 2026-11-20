@@ -297,7 +297,7 @@ private const val PANEL_RADIUS = 56f
 private const val CARD_CONTENT_W = CARD_W - (CARD_MARGIN + PANEL_PAD) * 2
 
 private const val LOGO_GAP = 20f
-private const val LOGO_ASPECT = 730f / 484f
+private const val LOGO_ASPECT = 732f / 440f
 
 /** Air above the panel, and the band under it that holds the brand. */
 private const val OUTER_TOP = 56f
