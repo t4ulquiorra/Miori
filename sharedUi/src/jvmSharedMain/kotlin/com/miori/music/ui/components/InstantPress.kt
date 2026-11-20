@@ -45,32 +45,18 @@ fun Modifier.instantPressClickable(
     shape: Shape,
     onClick: () -> Unit,
     enabled: Boolean = true,
-    pressedScale: Float = INSTANT_PRESS_SCALE,
+    pressedScale: Float = 1f,
 ): Modifier {
     val pressSource = remember { MutableInteractionSource() }
     val clickSource = remember { MutableInteractionSource() }
     val indication = LocalIndication.current
     val pressed by pressSource.collectIsPressedAsState()
-    // Read in draw only: a frame of the spring redraws the card, never recomposes it.
-    val scaleAnim = animateFloatAsState(
-        targetValue = if (pressed && enabled) pressedScale else 1f,
-        animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium),
-        label = "instantPressScale",
-    )
     val dimAnim = animateFloatAsState(
         targetValue = if (pressed && enabled) 1f else 0f,
         animationSpec = tween(durationMillis = if (pressed) 70 else 180),
         label = "instantPressDim",
     )
     return this
-        .drawWithContent {
-            val factor = scaleAnim.value
-            if (factor == 1f) {
-                drawContent()
-            } else {
-                scale(factor, factor) { this@drawWithContent.drawContent() }
-            }
-        }
         .pointerInput(enabled) {
             if (!enabled) return@pointerInput
             awaitEachGesture {
@@ -114,7 +100,7 @@ fun Modifier.instantPressClickable(
 }
 
 /** How far a touched card sinks. */
-private const val INSTANT_PRESS_SCALE = 0.95f
+private const val INSTANT_PRESS_SCALE = 1f
 
 /** How dark a touched card goes at full press. */
 private const val INSTANT_PRESS_DIM = 0.18f

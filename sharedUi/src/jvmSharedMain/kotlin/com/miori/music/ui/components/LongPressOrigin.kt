@@ -118,13 +118,6 @@ fun Modifier.longPressMenuClickable(
     val capture = remember { HoldCapture() }
     val interaction = remember { MutableInteractionSource() }
     val indication = LocalIndication.current
-    val pressed by interaction.collectIsPressedAsState()
-    // Read in draw only: a frame of the spring redraws this item, never recomposes it.
-    val pressScale = animateFloatAsState(
-        targetValue = if (pressed && enabled) PRESS_SCALE else 1f,
-        animationSpec = spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMedium),
-        label = "pressScale",
-    )
     val graphicsContext = LocalGraphicsContext.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -155,18 +148,6 @@ fun Modifier.longPressMenuClickable(
     }
     return this
         .onPlaced { capture.coordinates = it }
-        // Scaled while drawing, not in a layer of its own: a list of rows would
-        // otherwise carry one render node each for a press that lasts a moment.
-        // Outside the click, so its ripple shrinks with the item; outside the
-        // capture below too, so the lifted picture is taken at full size.
-        .drawWithContent {
-            val factor = pressScale.value
-            if (factor == 1f) {
-                drawContent()
-            } else {
-                scale(factor, factor) { this@drawWithContent.drawContent() }
-            }
-        }
         .combinedClickable(
             interactionSource = interaction,
             indication = indication,
@@ -214,6 +195,3 @@ private class HoldCapture {
 }
 
 private val NoLiftPadding = PaddingValues()
-
-/** How far a pressed row or card sinks. */
-private const val PRESS_SCALE = 0.97f

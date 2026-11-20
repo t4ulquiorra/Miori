@@ -1435,17 +1435,10 @@ fun SignInBanner(
      */
     motion: Boolean = true,
 ) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) 0.98f else 1f, spring(stiffness = 900f), label = "signInScale")
     Box(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = PAGE_GUTTER, vertical = 8.dp)
-            .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            }
             .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f))
             .border(
