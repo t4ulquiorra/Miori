@@ -36,6 +36,8 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
+import com.miori.music.ui.screens.LocalArtworkScrolling
 import org.intellij.lang.annotations.Language
 
 /**
@@ -80,12 +82,18 @@ fun OrganicFluidBackground(
         }
     }
 
+    val scrolling = LocalArtworkScrolling.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(lifecycle, clock) {
+    LaunchedEffect(lifecycle, clock, scrolling) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             snapshotFlow { clock.visible && speedState.value > 0f }.collectLatest { running ->
                 if (!running) return@collectLatest
                 while (true) {
+                    if (scrolling()) {
+                        FluidTimeline.pause()
+                        snapshotFlow { scrolling() }.first { !it }
+                        FluidTimeline.pause()
+                    }
                     val frameNanos = withFrameNanos { it }
                     clock.seconds = FluidTimeline.tick(frameNanos, speedState.value)
                 }
@@ -117,6 +125,10 @@ private object FluidTimeline {
     var phase: Double = 30.0
         private set
     private var lastFrameNanos = 0L
+
+    fun pause() {
+        lastFrameNanos = 0L
+    }
 
     fun tick(frameNanos: Long, speed: Float): Double {
         if (frameNanos > lastFrameNanos) {

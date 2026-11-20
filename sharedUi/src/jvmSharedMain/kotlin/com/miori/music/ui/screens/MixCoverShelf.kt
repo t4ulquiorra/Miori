@@ -63,18 +63,22 @@ internal fun MixCoverShelf(
     onItemClick: (ShelfItem) -> Unit,
     onItemLongPress: ((ShelfItem) -> Unit)?,
 ) {
+    val rowState = androidx.compose.foundation.lazy.rememberLazyListState()
     Column(Modifier.padding(bottom = 26.dp)) {
         SectionHeader(shelf.title, shelf.subtitle)
-        ShelfRow(
-            contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            itemsIndexed(shelf.items) { _, item ->
-                MixCoverCard(
-                    item = item,
-                    onClick = { onItemClick(item) },
-                    onLongPress = onItemLongPress?.let { { it(item) } },
-                )
+        PausedWhileScrolling(rowState) {
+            ShelfRow(
+                state = rowState,
+                contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                itemsIndexed(shelf.items) { _, item ->
+                    MixCoverCard(
+                        item = item,
+                        onClick = { onItemClick(item) },
+                        onLongPress = onItemLongPress?.let { { it(item) } },
+                    )
+                }
             }
         }
     }

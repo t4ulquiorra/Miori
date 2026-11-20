@@ -137,7 +137,7 @@ fun MixCoverOverlay(
         ) {
             Text(
                 text = madeForYou,
-                color = Color.White.copy(alpha = 0.92f),
+                color = Color.White.copy(alpha = 0.62f),
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontSize = 13.sp,
                     lineHeight = 16.sp,
