@@ -2,6 +2,15 @@ name: Android Release APK
 
 on:
   workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Target Architecture'
+        required: false
+        default: 'arm64'
+        type: choice
+        options:
+          - 'arm64'
+          - 'all'
 
 jobs:
   build-prod-release:
@@ -26,40 +35,46 @@ jobs:
         [ -n "${{ secrets.LASTFM_API_KEY }}" ] && echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" >> local.properties
         [ -n "${{ secrets.LASTFM_SECRET }}" ] && echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
         [ -n "${{ secrets.LISTEN_TOGETHER_SERVER }}" ] && echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties
+        [ -n "${{ secrets.ADDON_AUTH_SERVER }}" ] && echo "ADDON_AUTH_SERVER=${{ secrets.ADDON_AUTH_SERVER }}" >> local.properties
 
         if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.jks
-          cat << EOF > keystore.properties
-        storeFile=release.jks
-        storePassword=${{ secrets.KEYSTORE_PASSWORD }}
-        keyAlias=${{ secrets.KEY_ALIAS }}
-        keyPassword=${{ secrets.KEY_PASSWORD }}
-        EOF
+          printf 'storeFile=release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "${{ secrets.KEYSTORE_PASSWORD }}" "${{ secrets.KEY_ALIAS }}" "${{ secrets.KEY_PASSWORD }}" > keystore.properties
         else
           echo "::warning::Using temporary self-signed keystore fallback"
           keytool -genkeypair -v -keystore release.jks -alias miori -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass android -keypass android -dname "CN=Miori, OU=Music, O=Miori, L=City, ST=State, C=US"
-          cat << EOF > keystore.properties
-        storeFile=release.jks
-        storePassword=android
-        keyAlias=miori
-        keyPassword=android
-        EOF
+          printf 'storeFile=release.jks\nstorePassword=android\nkeyAlias=miori\nkeyPassword=android\n' > keystore.properties
         fi
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    - name: Build Signed Prod Release APK
-      run: ./gradlew assembleProdRelease
+    - name: Build Signed Prod Release APK (arm64 only)
+      if: ${{ inputs.arch == 'arm64' || github.event_name != 'workflow_dispatch' || inputs.arch == '' }}
+      run: ./gradlew :app:assembleProdRelease -Pandroid.injected.build.abi=arm64-v8a
 
-    - name: Upload APK Artifact
+    - name: Build Signed Prod Release APK (all architectures)
+      if: ${{ inputs.arch == 'all' }}
+      run: ./gradlew :app:assembleProdRelease
+
+    - name: Upload arm64 APK Artifact
+      if: ${{ inputs.arch == 'arm64' || github.event_name != 'workflow_dispatch' || inputs.arch == '' }}
       uses: actions/upload-artifact@v4
       with:
-        name: miori-prod-release-signed
+        name: miori-arm64-v8a-release
+        path: app/build/outputs/apk/prod/release/*arm64*.apk
+
+    - name: Upload All APK Artifacts
+      if: ${{ inputs.arch == 'all' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: miori-prod-release-all
         path: app/build/outputs/apk/prod/release/*.apk
 
     - name: Upload Wear OS APK Artifact
+      if: ${{ inputs.arch == 'all' }}
       uses: actions/upload-artifact@v4
       with:
         name: miori-wear-prod-release-signed
