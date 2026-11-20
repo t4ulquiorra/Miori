@@ -1435,6 +1435,7 @@ fun SignInBanner(
      */
     motion: Boolean = true,
 ) {
+    val interaction = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
             .fillMaxWidth()
