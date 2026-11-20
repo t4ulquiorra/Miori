@@ -265,6 +265,11 @@ private fun cardText(pick: TopPick, listenerName: String?): CardText {
             title = stringResource(Res.string.top_pick_discovery_station),
             subtitle = "",
         )
+        TopPickKind.MADE_FOR_YOU_MIX -> CardText(
+            eyebrow = "",
+            title = pick.title,
+            subtitle = pick.subtitle,
+        )
     }
 }
 
@@ -351,20 +356,33 @@ private fun TopPickCard(
                 eyebrowColor = PhotoEyebrow
                 branded = false
             }
+            TopPickKind.MADE_FOR_YOU_MIX -> {
+                MixFluidArt(pick.title, Modifier.fillMaxSize())
+                eyebrowColor = Color.White
+                branded = false
+            }
         }
-        if (branded) {
-            Icon(
-                painter = painterResource(Res.drawable.ic_logo),
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 12.dp, end = 12.dp)
-                    .height(15.dp)
-                    .aspectRatio(732f / 440f),
+        if (pick.kind == TopPickKind.MADE_FOR_YOU_MIX) {
+            MixCoverOverlay(
+                title = text.title,
+                subtitle = text.subtitle,
+                modifier = Modifier.fillMaxSize(),
             )
+        } else {
+            if (branded) {
+                Icon(
+                    painter = painterResource(Res.drawable.ic_logo),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 12.dp, end = 12.dp)
+                        .height(15.dp)
+                        .aspectRatio(732f / 440f),
+                )
+            }
+            CardCaption(text, eyebrowColor, Modifier.align(Alignment.BottomStart))
         }
-        CardCaption(text, eyebrowColor, Modifier.align(Alignment.BottomStart))
     }
 }
 

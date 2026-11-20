@@ -9,6 +9,7 @@ import com.miori.music.data.model.Song
 import com.miori.music.data.model.TopPick
 import com.miori.music.data.model.TopPickKind
 import com.miori.music.data.model.TopPickMood
+import com.miori.music.data.model.TopPickSong
 import com.miori.music.data.model.WatchTarget
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -66,6 +67,8 @@ object TopPicks {
         val artists: List<ArtistRef> = emptyList(),
         val songs: List<Song> = emptyList(),
         val genres: List<String> = emptyList(),
+        /** The songs played most, all time, best first. */
+        val topSongs: List<Song> = emptyList(),
     )
 
     suspend fun build(
@@ -116,8 +119,20 @@ object TopPicks {
             }
             artists.getOrNull(2)?.let { andSimilar(it, photos) }?.let(::add)
             discoveryStation(mixes, artists, history)?.let(::add)
-        }.shuffled()
-        listOfNotNull(lead) + rest
+            madeForYouMix(mixes, history, local)?.let(::add)
+        }.shuffled().let { shuffled ->
+            val withArt = shuffled.firstOrNull { it.kind == TopPickKind.NEW_RELEASE_MIX && it.images.isNotEmpty() }
+                ?: shuffled.firstOrNull { it.images.isNotEmpty() }
+            if (withArt == null) shuffled else listOf(withArt) + shuffled.filter { it !== withArt }
+        }
+        val all = listOfNotNull(lead) + rest
+        val mix = all.firstOrNull { it.kind == TopPickKind.MADE_FOR_YOU_MIX }
+        if (mix == null || all.size < 2) {
+            all
+        } else {
+            val without = all.filter { it !== mix }
+            without.toMutableList().also { it.add(Random.nextInt(1, 3).coerceAtMost(without.size), mix) }
+        }
     }
 
     /**
@@ -139,6 +154,10 @@ object TopPicks {
 
     /** The queue a card starts. Never called for [TopPickKind.LATEST_RELEASE], which opens a page. */
     suspend fun queue(pick: TopPick): Result<List<Song>> {
+        if (pick.kind == TopPickKind.MADE_FOR_YOU_MIX) {
+            if (pick.mood != null) return moodQueue(pick)
+            if (pick.songs.isNotEmpty()) return Result.success(pick.songs.map { it.toSong() }.shuffled())
+        }
         if (pick.kind == TopPickKind.MOOD) return moodQueue(pick)
         val target = pick.watch ?: return Result.failure(IllegalStateException("no queue behind ${pick.kind}"))
         if (pick.kind == TopPickKind.PERSONAL_STATION || pick.kind == TopPickKind.DISCOVERY_STATION) {
@@ -292,6 +311,40 @@ object TopPicks {
             }
             ?: return null
         return TopPick(kind = TopPickKind.PERSONAL_STATION, watch = watch)
+    }
+
+    private fun madeForYouMix(mixes: Map<Mix, ShelfItem>, history: List<Song>, local: LocalTaste): TopPick? {
+        val hints = (local.genres.map { it.lowercase(Locale.ROOT) } + regionHints()).distinct()
+        fun fromMood(title: String, mood: TopPickMood) =
+            TopPick(kind = TopPickKind.MADE_FOR_YOU_MIX, title = title, mood = mood, hints = hints)
+        fun fromSongs(title: String, songs: List<Song>): TopPick? {
+            val picked = songs.distinctBy { it.videoId }.take(30)
+            if (picked.size < 3) return null
+            return TopPick(
+                kind = TopPickKind.MADE_FOR_YOU_MIX,
+                title = title,
+                subtitle = picked.map { it.artist }.filter { it.isNotBlank() }.distinct().take(3).joinToString(", "),
+                songs = picked.map { TopPickSong(it.videoId, it.title, it.artist, it.thumbnailUrl) },
+            )
+        }
+        val candidates = listOfNotNull(
+            fromMood("Chill Mix", TopPickMood.CHILL),
+            fromMood("Friends Mix", TopPickMood.SOCIAL),
+            fromMood("Get Up! Mix", TopPickMood.ENERGY),
+            fromSongs("Favorites Mix", local.topSongs),
+            fromSongs("Replay Mix", history),
+            mixes[Mix.NEW_RELEASE]?.let { mix ->
+                mix.watchTarget()?.let { watch ->
+                    TopPick(
+                        kind = TopPickKind.MADE_FOR_YOU_MIX,
+                        title = "New Music Mix",
+                        subtitle = mix.subtitle,
+                        watch = watch,
+                    )
+                }
+            },
+        )
+        return candidates.randomOrNull()
     }
 
     private fun moodPick(now: LocalDateTime, local: LocalTaste): TopPick =

@@ -1839,10 +1839,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun localTaste(): TopPicks.LocalTaste {
         val month = runCatching { ListeningStats.summary(ReplayPeriod.THIS_MONTH) }.getOrNull()
             ?: return TopPicks.LocalTaste()
+        val allTime = runCatching { ListeningStats.summary(ReplayPeriod.ALL_TIME) }.getOrNull()
         return TopPicks.LocalTaste(
             artists = month.artists.take(10).map { ArtistRef(name = it.title, browseId = it.browseId) },
             songs = month.songs.take(5).map { it.song },
             genres = month.genres.take(3).map { it.title },
+            topSongs = allTime?.songs.orEmpty().take(30).map { it.song },
         )
     }
 

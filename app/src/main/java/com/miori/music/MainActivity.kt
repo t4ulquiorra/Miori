@@ -278,6 +278,8 @@ import com.miori.music.ui.components.QueueActionNotice
 import com.miori.music.ui.components.QueueActionNoticeHost
 import com.miori.music.ui.components.TopBarAccountButton
 import com.miori.music.ui.screens.SegmentedControl
+import com.miori.music.ui.screens.LocalMixCoverBackground
+import com.miori.music.ui.components.OrganicFluidBackground
 import com.miori.music.ui.components.SearchField
 import com.miori.music.sharedui.resources.Res as SharedRes
 import com.miori.music.sharedui.resources.search_hint
@@ -438,6 +440,13 @@ class MainActivity : AppCompatActivity() {
                     LocalOverscrollFactory provides iosOverscrollFactory,
                     LocalLiquidGlassEnabled provides liquidGlassEnabled,
                     LocalAppBackdrop provides appBackdrop,
+                    LocalMixCoverBackground provides { colors, motion, modifier ->
+                        OrganicFluidBackground(
+                            modifier = modifier,
+                            colors = colors,
+                            animationSpeed = if (motion) 2.2f else 0f,
+                        )
+                    },
                 ) {
                 // The window's width, measured rather than asked for.
                 //

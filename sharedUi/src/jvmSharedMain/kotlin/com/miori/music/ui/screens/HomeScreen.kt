@@ -288,7 +288,13 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedShelves(
             val openItem: (ShelfItem) -> Unit = { item -> onItemClick(item, shelf.title) }
             // Listen again and Quick picks are lists on the web player, as
             // Recents is here: one pager for all three.
-            if (shelf.layout == ShelfLayout.LIST ||
+            if (shelf.isMixShelf()) {
+                MixCoverShelf(
+                    shelf = shelf,
+                    onItemClick = openItem,
+                    onItemLongPress = onItemLongPress,
+                )
+            } else if (shelf.layout == ShelfLayout.LIST ||
                 (index == 0 && shelf.title.equals(RECENTS_TITLE, ignoreCase = true))
             ) {
                 RecentShelf(

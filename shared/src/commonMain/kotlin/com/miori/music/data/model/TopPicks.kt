@@ -41,6 +41,9 @@ enum class TopPickKind {
 
     /** Music the listener hasn't played yet — YouTube's Discover Mix. */
     DISCOVERY_STATION,
+
+    /** Apple Music's Made for You mixes (Chill Mix, Favorites Mix, etc.). */
+    MADE_FOR_YOU_MIX,
 }
 
 /**
@@ -152,4 +155,32 @@ data class TopPick(
     val exclude: List<String> = emptyList(),
     /** Words that steer a mood station toward the listener's own scene, e.g. "bollywood". */
     val hints: List<String> = emptyList(),
-)
+    /** The tracks a [TopPickKind.MADE_FOR_YOU_MIX] card plays when built from songs. */
+    val songs: List<TopPickSong> = emptyList(),
+) {
+    /**
+     * Page id for a Made for You Mix: YouTube playlist if available, else local mix page id.
+     */
+    val mixPageId: String
+        get() = watch?.playlistId
+            ?.takeIf { it.isNotBlank() && !it.startsWith("RDAMVM") }
+            ?.let { if (it.startsWith("VL")) it else "VL$it" }
+            ?: "local:mix:$title"
+}
+
+/** A track kept inside a [TopPick], small enough to sit in the saved row. */
+@Serializable
+data class TopPickSong(
+    val videoId: String,
+    val title: String,
+    val artist: String,
+    val thumbnailUrl: String? = null,
+) {
+    fun toSong(): Song = Song(
+        videoId = videoId,
+        title = title,
+        artist = artist,
+        thumbnailUrl = thumbnailUrl,
+    )
+}
+
