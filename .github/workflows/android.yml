@@ -51,20 +51,18 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    - name: Build Signed Prod Release APK (arm64 only)
-      if: ${{ inputs.arch == 'arm64' || github.event_name != 'workflow_dispatch' || inputs.arch == '' }}
-      run: ./gradlew :app:assembleProdRelease -Pandroid.injected.build.abi=arm64-v8a -Pmiori.bundleWear=false
+    - name: Build Signed Prod Release APK
+      run: ./gradlew :app:assembleProdRelease -Pmiori.bundleWear=false
 
-    - name: Build Signed Prod Release APK (all architectures)
-      if: ${{ inputs.arch == 'all' }}
-      run: ./gradlew :app:assembleProdRelease
+    - name: Verify Generated APKs
+      run: ls -lh app/build/outputs/apk/prod/release/
 
     - name: Upload arm64 APK Artifact
       if: ${{ inputs.arch == 'arm64' || github.event_name != 'workflow_dispatch' || inputs.arch == '' }}
       uses: actions/upload-artifact@v4
       with:
         name: miori-arm64-v8a-release
-        path: app/build/outputs/apk/prod/release/*.apk
+        path: app/build/outputs/apk/prod/release/*arm64*.apk
 
     - name: Upload All APK Artifacts
       if: ${{ inputs.arch == 'all' }}
