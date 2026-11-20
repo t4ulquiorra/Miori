@@ -62,7 +62,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: miori-arm64-v8a-release
-        path: app/build/outputs/apk/prod/release/*arm64*.apk
+        path: app/build/outputs/apk/prod/release/*.apk
 
     - name: Upload All APK Artifacts
       if: ${{ inputs.arch == 'all' }}
