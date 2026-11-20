@@ -10,6 +10,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -76,7 +78,30 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Velocity
 import coil3.compose.AsyncImage
 import com.miori.music.ui.components.thumbnailBorder
+import com.miori.music.ui.components.SwipeToQueueBox
 import com.miori.music.ui.icons.MioriIcons
+import androidx.compose.material.icons.rounded.Add
+import com.miori.music.ui.haptics.Haptic
+import com.miori.music.ui.haptics.rememberHaptics
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
+import com.miori.music.ui.components.MenuFrostDark
+import com.miori.music.ui.components.liveMenuFrost
+import dev.chrisbanes.haze.HazeState
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.Immutable
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.semantics
 import com.miori.music.data.model.QueueTier
 import com.miori.music.data.model.Song
 import com.miori.music.playback.autoplaySectionStart
@@ -235,6 +260,14 @@ internal fun InlineQueue(
     collapsePlayerOnScroll: Boolean = false,
     onRevealPlayer: () -> Unit = {},
     onHidePlayer: () -> Unit = {},
+    /** Playback modes, shown as a row of buttons right under the current song. */
+    shuffleEnabled: Boolean = false,
+    repeatMode: Int = RepeatModes.OFF,
+    onToggleShuffle: () -> Unit = {},
+    onCycleRepeat: () -> Unit = {},
+    onToggleAutoplay: () -> Unit = {},
+    /** Frost source for the long-press info cards on the playback mode buttons. */
+    hazeState: HazeState? = null,
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -273,7 +306,35 @@ internal fun InlineQueue(
         }
     }
 
-    Column(modifier.fillMaxWidth()) {
+    var modeInfo by remember { mutableStateOf<QueueModeInfo?>(null) }
+    var modeInfoOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(modeInfoOpen, modeInfo) {
+        if (modeInfoOpen) {
+            delay(2600L)
+            modeInfoOpen = false
+        }
+    }
+    val modeInfoPopover = LocalQueueInfoPopover.current
+
+    Box(modifier.fillMaxWidth()) {
+    Column(Modifier.fillMaxWidth()) {
+        // The current song is already shown by the player's collapsed header
+        // (the sleeve flies into it), so the playback modes sit directly under it.
+        Spacer(Modifier.height(10.dp))
+        QueueModeRow(
+            shuffleEnabled = shuffleEnabled,
+            repeatMode = repeatMode,
+            autoplayEnabled = autoplayEnabled,
+            onToggleShuffle = onToggleShuffle,
+            onCycleRepeat = onCycleRepeat,
+            onToggleAutoplay = onToggleAutoplay,
+            hazeState = hazeState,
+            onShowInfo = {
+                modeInfo = it
+                modeInfoOpen = true
+            },
+        )
+        Spacer(Modifier.height(18.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -303,7 +364,9 @@ internal fun InlineQueue(
                     // drag on itself and slides the whole player away.
                     .nestedScroll(keepScroll)
                     .then(if (collapsePlayerOnScroll) Modifier.nestedScroll(controlsOnScroll) else Modifier),
-                contentPadding = PaddingValues(horizontal = PLAYER_GUTTER),
+                // Zona fade [fadingEdges] 28dp; padding atas sengaja lebih kecil
+                // supaya "Add Songs to Queue" naik dan hanya sedikit masuk fade.
+                contentPadding = PaddingValues(start = PLAYER_GUTTER, end = PLAYER_GUTTER, top = 4.dp),
             ) {
                 if (tracks.history.isNotEmpty()) {
                     item(key = "header-history") {
@@ -323,34 +386,16 @@ internal fun InlineQueue(
                         )
                     }
                 }
-                if (nowPlaying != null) {
-                    item(key = "header-now-playing") {
-                        QueueHeading(
-                            title = stringResource(Res.string.now_playing),
-                            modifier = Modifier.padding(top = 12.dp, bottom = 6.dp),
-                        )
-                    }
-                    item(key = nowPlaying.key) {
-                        InlineQueueRow(
-                            song = nowPlaying.song,
-                            isCurrent = true,
-                            onClick = { onJumpTo(nowPlaying.timelineIndex) },
-                            onRemove = { onRemove(nowPlaying.timelineIndex) },
-                            locked = controlsLocked,
-                            modifier = queueMotion(),
-                        )
-                    }
-                }
+
                 if (tracks.user.isNotEmpty()) {
-                    item(key = "header-user-queue") {
-                        QueueHeading(
-                            title = stringResource(Res.string.next_in_queue),
-                            modifier = Modifier.padding(top = 16.dp, bottom = 6.dp).then(queueMotion()),
-                        ) {
-                            QueueClearButton(MaterialTheme.typography.labelLarge, controlsLocked, onClear)
-                        }
-                    }
+                    // No heading of its own: the "Queue" title above already names
+                    // this list and carries the Clear button.
                     queueSection(tracks.user, QueueSection.USER, drag, controlsLocked, onJumpTo, onRemove)
+                }
+                if (!controlsLocked) {
+                    item(key = "add-songs") {
+                        AddSongsRow(onClick = AddSongsRequest::show, modifier = queueMotion())
+                    }
                 }
                 if (tracks.context.isNotEmpty()) {
                     item(key = "header-context") {
@@ -390,6 +435,19 @@ internal fun InlineQueue(
             }
         }
     }
+    val shownInfo = modeInfo
+    if (modeInfoPopover != null && shownInfo != null) {
+        modeInfoPopover(
+            modeInfoOpen,
+            shownInfo.anchor,
+            shownInfo.atStart,
+            { modeInfoOpen = false },
+            shownInfo.title,
+            shownInfo.body,
+            hazeState,
+        )
+    }
+    }
 }
 
 /**
@@ -428,6 +486,40 @@ private fun LazyListScope.queueSection(
     }
 }
 
+/** "Add Songs to Queue": opens the search sheet the host draws over the player. */
+@Composable
+private fun AddSongsRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color.White.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Add,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.9f),
+                modifier = Modifier.size(24.dp),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = stringResource(Res.string.add_songs_to_queue),
+            style = MaterialTheme.typography.bodyLarge,
+            color = Color.White,
+        )
+    }
+}
+
 @Composable
 private fun QueueHeading(
     title: String,
@@ -456,6 +548,188 @@ private fun QueueClearButton(style: TextStyle, locked: Boolean, onClear: () -> U
             .clickable(enabled = !locked, onClick = onClear)
             .padding(horizontal = 8.dp, vertical = 4.dp),
     )
+}
+
+/** Info card of a playback mode button, drawn by the app as a floating popover. */
+@Immutable
+private class QueueModeInfo(
+    val title: String,
+    val body: String,
+    val anchor: Rect,
+    val atStart: Boolean,
+)
+
+/** Shuffle, repeat and AutoPlay as one row of equal buttons. */
+@Composable
+private fun QueueModeRow(
+    shuffleEnabled: Boolean,
+    repeatMode: Int,
+    autoplayEnabled: Boolean,
+    onToggleShuffle: () -> Unit,
+    onCycleRepeat: () -> Unit,
+    onToggleAutoplay: () -> Unit,
+    hazeState: HazeState? = null,
+    onShowInfo: (QueueModeInfo) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    val automixEnabled by PlayerSettings.smartFadeEnabled.collectAsStateWithLifecycle()
+    Row(
+        // Above the list under it, so the info cards hanging off the buttons stay visible.
+        modifier = modifier.fillMaxWidth().zIndex(1f),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        QueueModeButton(
+            icon = MioriIcons.Shuffle,
+            contentDescription = stringResource(
+                if (shuffleEnabled) Res.string.shuffle_on else Res.string.shuffle_off,
+            ),
+            highlighted = shuffleEnabled,
+            haptic = if (shuffleEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
+            // Toggling replaces the upcoming stretch of the queue; a second tap
+            // before that lands would undo work that hasn't happened yet.
+            tapWindowMs = 400L,
+            onClick = onToggleShuffle,
+            info = stringResource(Res.string.queue_info_shuffle_title) to
+                stringResource(Res.string.queue_info_shuffle_body),
+            popupAtStart = true,
+            onShowInfo = onShowInfo,
+            hazeState = hazeState,
+            modifier = Modifier.weight(1f),
+        )
+        QueueModeButton(
+            icon = if (repeatMode == RepeatModes.ONE) MioriIcons.RepeatOne else MioriIcons.Repeat,
+            contentDescription = when (repeatMode) {
+                RepeatModes.ONE -> stringResource(Res.string.repeat_one)
+                RepeatModes.ALL -> stringResource(Res.string.repeat_all)
+                else -> stringResource(Res.string.repeat_off)
+            },
+            highlighted = repeatMode != RepeatModes.OFF,
+            haptic = when (repeatMode) {
+                RepeatModes.OFF -> Haptic.ToggleOn
+                RepeatModes.ONE -> Haptic.ToggleOff
+                else -> Haptic.Select
+            },
+            onClick = onCycleRepeat,
+            info = stringResource(Res.string.queue_info_repeat_title) to
+                stringResource(Res.string.queue_info_repeat_body),
+            popupAtStart = true,
+            onShowInfo = onShowInfo,
+            hazeState = hazeState,
+            modifier = Modifier.weight(1f),
+        )
+        QueueModeButton(
+            icon = MioriIcons.Infinity,
+            contentDescription = stringResource(
+                if (autoplayEnabled) Res.string.autoplay_on else Res.string.autoplay_off,
+            ),
+            highlighted = autoplayEnabled,
+            haptic = if (autoplayEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
+            // AutoPlay's toggle goes to the playback service and may hit the
+            // network, so it ignores taps for longer than shuffle does.
+            tapWindowMs = 700L,
+            onClick = onToggleAutoplay,
+            info = stringResource(Res.string.queue_info_autoplay_title) to
+                stringResource(Res.string.queue_info_autoplay_body),
+            popupAtStart = false,
+            onShowInfo = onShowInfo,
+            hazeState = hazeState,
+            modifier = Modifier.weight(1f),
+        )
+        QueueModeButton(
+            icon = MioriIcons.Automix,
+            contentDescription = stringResource(
+                if (automixEnabled) Res.string.automix_on else Res.string.automix_off,
+            ),
+            highlighted = automixEnabled,
+            haptic = if (automixEnabled) Haptic.ToggleOff else Haptic.ToggleOn,
+            // Same switch as Settings > Automix; it may start a model download.
+            tapWindowMs = 700L,
+            onClick = { PlayerPlatform.host.toggleAutomix() },
+            info = stringResource(Res.string.queue_info_automix_title) to
+                stringResource(Res.string.queue_info_automix_body),
+            popupAtStart = false,
+            onShowInfo = onShowInfo,
+            hazeState = hazeState,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun QueueModeButton(
+    icon: ImageVector,
+    contentDescription: String,
+    highlighted: Boolean,
+    haptic: Haptic,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    tapWindowMs: Long = 0L,
+    /** Title and description shown in a frosted card on long press; null for none. */
+    info: Pair<String, String>? = null,
+    /** Card lines up with the button's left edge, otherwise its right edge. */
+    popupAtStart: Boolean = true,
+    hazeState: HazeState? = null,
+    onShowInfo: (QueueModeInfo) -> Unit = {},
+) {
+    val haptics = rememberHaptics()
+    val lastTap = remember { LongArray(1) }
+    var bounds by remember { mutableStateOf<Rect?>(null) }
+    val container by animateColorAsState(
+        targetValue = if (highlighted) Color.White.copy(alpha = 0.88f) else Color.White.copy(alpha = 0.14f),
+        label = "queueModeFill",
+    )
+    val tint = if (highlighted) Color.Black.copy(alpha = 0.82f) else Color.White.copy(alpha = 0.9f)
+    Box(modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(40.dp)
+                .onGloballyPositioned { bounds = it.boundsInWindow() }
+                .clip(RoundedCornerShape(percent = 50))
+                .background(container)
+                .combinedClickable(
+                    onLongClick = if (info != null) {
+                        {
+                            haptics.play(Haptic.Select)
+                            bounds?.let { rect ->
+                                onShowInfo(QueueModeInfo(info.first, info.second, rect, popupAtStart))
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                    onClick = {
+                        val now = System.currentTimeMillis()
+                        if (now - lastTap[0] >= tapWindowMs) {
+                            lastTap[0] = now
+                            haptics.play(haptic)
+                            onClick()
+                        }
+                    },
+                )
+                .semantics { this.contentDescription = contentDescription },
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(21.dp),
+                )
+                if (label != null) {
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = tint,
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -726,6 +1000,54 @@ private fun InlineQueueRow(
     onClick: () -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
+    locked: Boolean = false,
+    draggable: Boolean = false,
+    lifted: Boolean = false,
+    onDragStart: () -> Unit = {},
+    onDrag: (Float) -> Unit = {},
+    onDragEnd: () -> Unit = {},
+) {
+    if (locked || lifted) {
+        InlineQueueRowBody(
+            song = song,
+            isCurrent = isCurrent,
+            onClick = onClick,
+            modifier = modifier,
+            locked = locked,
+            draggable = draggable,
+            lifted = lifted,
+            onDragStart = onDragStart,
+            onDrag = onDrag,
+            onDragEnd = onDragEnd,
+        )
+    } else {
+        SwipeToQueueBox(
+            onSwipeToQueue = onRemove,
+            modifier = modifier,
+            destructive = true,
+        ) {
+            InlineQueueRowBody(
+                song = song,
+                isCurrent = isCurrent,
+                onClick = onClick,
+                modifier = Modifier,
+                locked = locked,
+                draggable = draggable,
+                lifted = lifted,
+                onDragStart = onDragStart,
+                onDrag = onDrag,
+                onDragEnd = onDragEnd,
+            )
+        }
+    }
+}
+
+@Composable
+private fun InlineQueueRowBody(
+    song: Song,
+    isCurrent: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     /** @see InlineQueue */
     locked: Boolean = false,
     /** Shows the handle; drags on it go to the callbacks below. */
@@ -747,30 +1069,6 @@ private fun InlineQueueRow(
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (draggable) {
-            Icon(
-                Icons.Rounded.DragHandle,
-                contentDescription = stringResource(Res.string.drag_to_reorder),
-                tint = Color.White.copy(alpha = 0.4f),
-                modifier = Modifier
-                    .size(20.dp)
-                    // The glyph sits well inset in its own box; this pulls it
-                    // back to the row's edge.
-                    .offset(x = (-4).dp)
-                    .pointerInput(Unit) {
-                        detectDragGestures(
-                            onDragStart = { onDragStart() },
-                            onDragEnd = { onDragEnd() },
-                            onDragCancel = { onDragEnd() },
-                            onDrag = { change, amount ->
-                                change.consume()
-                                onDrag(amount.y)
-                            },
-                        )
-                    },
-            )
-            Spacer(Modifier.width(4.dp))
-        }
         AsyncImage(
             model = rememberRemoteArtworkUrl(song),
             contentDescription = null,
@@ -805,20 +1103,35 @@ private fun InlineQueueRow(
             )
             Spacer(Modifier.width(10.dp))
         }
-        if (!locked) {
+        if (draggable) {
+            val dragLabel = stringResource(Res.string.drag_to_reorder)
             Box(
                 modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .clickable(onClick = onRemove),
+                    .size(width = 32.dp, height = 36.dp)
+                    .semantics { contentDescription = dragLabel }
+                    .pointerInput(Unit) {
+                        detectDragGestures(
+                            onDragStart = { onDragStart() },
+                            onDragEnd = { onDragEnd() },
+                            onDragCancel = { onDragEnd() },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                onDrag(amount.y)
+                            },
+                        )
+                    },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    Icons.Rounded.Close,
-                    contentDescription = stringResource(Res.string.remove_from_queue),
-                    tint = Color.White.copy(alpha = 0.55f),
-                    modifier = Modifier.size(18.dp),
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    repeat(3) {
+                        Box(
+                            Modifier
+                                .width(24.dp)
+                                .height(1.5.dp)
+                                .background(Color.White.copy(alpha = 0.45f), RoundedCornerShape(1.dp)),
+                        )
+                    }
+                }
             }
         }
     }

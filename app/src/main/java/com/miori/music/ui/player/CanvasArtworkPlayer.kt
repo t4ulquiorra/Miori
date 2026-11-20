@@ -10,6 +10,7 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RenderEffect
+import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.graphics.SurfaceTexture
 import android.os.Build
@@ -71,6 +72,23 @@ import java.util.Locale
 private const val TAG = "CanvasArtworkPlayer"
 
 /**
+ * How far the clip's bottom dissolve is lifted at the left and right edges,
+ * as a share of the fade height. The centre keeps the video's bottom, so the
+ * boundary reads as a V, as in Apple Music. Android 13+ only.
+ */
+private val CLIP_FADE_CURVE: Float get() = CanvasFadeTuning.effectiveCurve()
+
+/** Share of the old fade height that is kept, so the dissolve starts a little lower. */
+private val CLIP_FADE_HEIGHT_SCALE: Float get() = CanvasFadeTuning.effectiveHeight()
+
+/**
+ * Kekuatan kurva fade bawah klip. 1 = smootherstep asli. Makin besar, alpha turun
+ * lebih cepat dengan ekor lebih panjang di dalam band yang SAMA, jadi fade terasa
+ * lebih kuat dan halus tanpa menggeser batas blur ke atas.
+ */
+private val CLIP_FADE_POWER: Float get() = CanvasFadeTuning.power.floatValue
+
+/**
  * How long a clip gets to paint itself onto a surface it was just handed back
  * before the still art is brought in behind it instead. Long enough to cover a
  * decoder being re-created from cold, short enough that a clip which is never
@@ -78,8 +96,23 @@ private const val TAG = "CanvasArtworkPlayer"
  */
 private const val REPAINT_TIMEOUT_MS = 700L
 
+/** A periodic capture slower than this doubles the wait before the next one. */
+private const val FRAME_CAPTURE_BUDGET_MS = 8L
+
+/** The longest the capture loop backs off to when readbacks are running slow. */
+private const val FRAME_CAPTURE_MAX_WAIT_MS = 1_000L
+
+/**
+ * Sisi terpanjang frame yang disalin tiap frame selagi cover terbang ke/dari mini
+ * player dan klip tetap berjalan: cukup tajam untuk gerakan, murah untuk disalin.
+ */
+private const val LIVE_STILL_MAX_SIDE = 640
+
 /** How long after a clip leaves the screen its player is released — see its onDispose. */
 private const val DEFERRED_RELEASE_MS = 1_000L
+
+/** Sisi terpanjang frame yang diambil saat skip: cukup tajam untuk dianimasikan, murah dibaca dari GPU. */
+private const val LIVE_GRAB_PX = 720
 
 private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -90,6 +123,9 @@ private class ResumeGate {
 
     /** Whether the frame on screen is one a caller holds a still of. */
     var holdingStill = false
+
+    /** Jumlah frame video yang sudah mendarat di surface; dipakai untuk melewati salinan yang sama. */
+    var videoFrames = 0L
 }
 
 /** What a clip's player needs to leave the screen without blocking it. */
@@ -198,6 +234,16 @@ internal fun AndroidCanvasArtworkPlayer(
     bottomFade: Float = 0f,
     /** Optional end of the fade in view pixels; defaults to the view's bottom edge. */
     bottomFadeEndPx: Float? = null,
+    /** Blur radius in px, applied as a RenderEffect on the TextureView's own node (API 31+). */
+    blurPx: () -> Float = { 0f },
+    /** Pengali [bottomFade] yang dibaca tiap frame, untuk fade yang ikut animasi. */
+    bottomFadeScale: () -> Float = { 1f },
+    /**
+     * 0..1: seberapa jauh klip portrait yang di-contain sudah tumbuh menjadi crop
+     * layar penuh. Dibaca tiap frame supaya perubahan contain -> cover mengikuti
+     * progres panel, bukan berganti mode dalam satu frame.
+     */
+    fillProgress: () -> Float = { 0f },
     /**
      * Halts decoding for the length of a caller-driven transition — the sleeve
      * collapsing into the queue or lyrics panel and back — rather than only at
@@ -215,6 +261,7 @@ internal fun AndroidCanvasArtworkPlayer(
     captureStill: Boolean = false,
     onStillCaptured: (ImageBitmap?, Long) -> Unit = { _, _ -> },
     onResumed: () -> Unit = {},
+    frameGrab: CanvasFrameGrab? = null,
 ) {
     val context = LocalContext.current
 
@@ -239,12 +286,37 @@ internal fun AndroidCanvasArtworkPlayer(
     val currentPortraitRevealBounds by rememberUpdatedState(portraitRevealBounds)
     val currentPresentationAlpha by rememberUpdatedState(presentationAlpha)
     val currentPausedForTransition by rememberUpdatedState(pausedForTransition)
+    val currentFillProgress by rememberUpdatedState(fillProgress)
     val reportAspect by rememberUpdatedState(onAspectRatioChanged)
     val currentStartPositionMs by rememberUpdatedState(startPositionMs)
     val currentResumeDelayMs by rememberUpdatedState(resumeDelayMs)
     val reportResumed by rememberUpdatedState(onResumed)
     val teardown = remember { Teardown() }
     val gate = remember { ResumeGate() }
+
+    // Pembaca frame hidup untuk pemanggil: dibaca sinkron di thread utama, hanya
+    // sekali per skip, jadi biayanya sebatas satu frame kecil. Null bila belum
+    // ada frame yang benar-benar tampil.
+    DisposableEffect(frameGrab, canvas) {
+        val grab: () -> ImageBitmap? = {
+            val view = textureView
+            if (!rendered || view == null) {
+                null
+            } else {
+                // LIVE_GRAB_PX untuk sisi PENDEK view. View hero portrait setinggi
+                // player, sedangkan isi klipnya hanya sebagian; dengan sisi panjang
+                // sebagai patokan, isinya cuma ~330px lalu di-upscale 3x (buram).
+                val shortSide = minOf(view.width, view.height).coerceAtLeast(1)
+                val grabPx = (LIVE_GRAB_PX.toLong() * maxOf(view.width, view.height) / shortSide).toInt()
+                view.captureAt(grabPx, clipAspect, currentContentMode, currentAlignPortraitTop)
+                    ?.asImageBitmap()
+            }
+        }
+        frameGrab?.grab = grab
+        onDispose {
+            frameGrab?.let { if (it.grab === grab) it.grab = null }
+        }
+    }
 
     val player = remember {
         ExoPlayer.Builder(context)
@@ -277,7 +349,7 @@ internal fun AndroidCanvasArtworkPlayer(
                 if (aspect != clipAspect) rendered = false
                 clipAspect = aspect
                 reportAspect(aspect)
-                textureView?.applyContentTransform(clipAspect, currentContentMode, currentAlignPortraitTop)
+                textureView?.applyContentTransform(clipAspect, currentContentMode, currentAlignPortraitTop, currentFillProgress())
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -356,7 +428,7 @@ internal fun AndroidCanvasArtworkPlayer(
     // it moves — see [captureStill]. Read off the decoder's own output, not the
     // view: the copy runs on the render thread and leaves this one free.
     val reportStill by rememberUpdatedState(onStillCaptured)
-    LaunchedEffect(captureStill) {
+    LaunchedEffect(captureStill, rendered) {
         if (!captureStill) return@LaunchedEffect
         // The pause was asked for this frame. Let the decoder's last frame land.
         withFrameMillis { }
@@ -370,6 +442,26 @@ internal fun AndroidCanvasArtworkPlayer(
         if (still != null) gate.holdingStill = true
         Log.d(TAG, "still captured: ${still?.let { "${it.width}x${it.height}" }} at $position")
         reportStill(still?.asImageBitmap(), position)
+        // Klip yang tidak dijeda (perjalanan ke/dari mini player) terus berjalan,
+        // jadi frame yang dipakai sleeve ikut diperbarui tiap frame dan cover
+        // yang terbang tetap bergerak. Untuk collapse lyrics/queue klip dijeda,
+        // sehingga satu salinan di atas sudah cukup.
+        var copiedFrames = gate.videoFrames
+        while (!currentPausedForTransition) {
+            withFrameMillis { }
+            // Klip hanya 24-30 fps, sedangkan layar 60-120 Hz. Menyalin frame yang
+            // sama lagi di tiap vsync cuma membuang PixelCopy dan alokasi bitmap.
+            if (gate.videoFrames == copiedFrames) continue
+            copiedFrames = gate.videoFrames
+            val live = view.copyStill(
+                player.videoSize,
+                clipAspect,
+                contentMode,
+                alignPortraitTop,
+                LIVE_STILL_MAX_SIDE,
+            ) ?: continue
+            reportStill(live.asImageBitmap(), player.currentPosition)
+        }
     }
 
     // Repaint onto a surface that has just been handed back. A TextureView's
@@ -414,32 +506,39 @@ internal fun AndroidCanvasArtworkPlayer(
     // one — see [refreshFrameEveryMs]. A separate effect rather than a loop
     // folded into the one above: that one is keyed on [rendered] so it fires
     // again on every fade-in, and this one only needs to start once a fade-in
-    // has actually happened and then keep going for as long as it holds. Not
-    // while the clip holds still, whose next frame would be this one again.
-    LaunchedEffect(
-        rendered, refreshFrameEveryMs, frameCapturePx, clipAspect, contentMode, alignPortraitTop,
-        isPlaying, pausedForTransition,
-    ) {
+    // has actually happened and then keep going for as long as it holds.
+    // Read through rememberUpdatedState: at a few captures a second the loop
+    // must hand frames to the caller's current lambda, not the one it started with.
+    val currentOnFrameCaptured by rememberUpdatedState(onFrameCaptured)
+    LaunchedEffect(rendered, refreshFrameEveryMs, frameCapturePx, clipAspect, contentMode, alignPortraitTop) {
         val interval = refreshFrameEveryMs ?: return@LaunchedEffect
         if (frameCapturePx <= 0) return@LaunchedEffect
         Log.d(TAG, "periodic frame refresh started, interval=$interval")
-        if (!rendered || !isPlaying || pausedForTransition) return@LaunchedEffect
+        if (!rendered) return@LaunchedEffect
+        val maxWait = maxOf(interval, FRAME_CAPTURE_MAX_WAIT_MS)
+        var wait = interval
         while (isActive) {
-            delay(interval)
+            delay(wait)
+            // Waits for a real frame, so nothing is read back while the app is
+            // in the background or the screen is off.
+            withFrameMillis { }
             val view = textureView ?: continue
+            val startNs = System.nanoTime()
             val bitmap = view.captureAt(frameCapturePx, clipAspect, contentMode, alignPortraitTop)
+            val costMs = (System.nanoTime() - startNs) / 1_000_000L
             if (bitmap != null) {
-                Log.d(TAG, "periodic frame captured, size=${bitmap.width}x${bitmap.height}")
-                onFrameCaptured(bitmap.asImageBitmap())
+                currentOnFrameCaptured(bitmap.asImageBitmap())
             } else {
                 Log.w(TAG, "periodic frame capture returned null")
             }
+            // A slow readback stalls the main thread: back off instead of piling on.
+            wait = if (costMs > FRAME_CAPTURE_BUDGET_MS) (wait * 2).coerceAtMost(maxWait) else interval
         }
     }
 
     val alpha by animateFloatAsState(
         targetValue = if (rendered) 1f else 0f,
-        animationSpec = if (revealInstantly) snap() else tween(durationMillis = 320),
+        animationSpec = if (revealInstantly) snap() else tween(durationMillis = 160),
         label = "canvasAlpha",
     )
 
@@ -534,6 +633,7 @@ internal fun AndroidCanvasArtworkPlayer(
 
                     override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
                         delegate?.onSurfaceTextureUpdated(surface)
+                        gate.videoFrames++
                         // A frame while playing is the clip moving on from its still.
                         if (gate.holdingStill && player.playWhenReady) {
                             gate.holdingStill = false
@@ -546,7 +646,7 @@ internal fun AndroidCanvasArtworkPlayer(
                         // still artwork until its aspect and transform are ready.
                         if (!rendered) {
                             val transformed = textureView?.applyContentTransform(
-                                clipAspect, currentContentMode, currentAlignPortraitTop,
+                                clipAspect, currentContentMode, currentAlignPortraitTop, currentFillProgress(),
                             ) == true
                             val portrait = currentContentMode == CanvasContentMode.FIT_PORTRAIT &&
                                 clipAspect > 0f && clipAspect < 1f
@@ -594,15 +694,22 @@ internal fun AndroidCanvasArtworkPlayer(
             // closing into the mini player, and each pass built a fresh matrix,
             // gradient and three RenderEffects for a picture that hadn't
             // moved — and re-setting the effect makes the node rebuild it.
-            if (applied.transformDiffers(clipAspect, contentMode, alignPortraitTop, view.width, view.height)) {
-                view.applyContentTransform(clipAspect, contentMode, alignPortraitTop)
+            val fill = fillProgress().coerceIn(0f, 1f)
+            if (applied.transformDiffers(clipAspect, contentMode, alignPortraitTop, view.width, view.height, fill)) {
+                view.applyContentTransform(clipAspect, contentMode, alignPortraitTop, fill)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (applied.fadeDiffers(bottomFade, bounds, bottomFadeEndPx)) {
-                    view.setBottomFade(bottomFade, bounds, bottomFadeEndPx)
+                // Read here so the blur follows the panel's progress every frame.
+                val blur = (blurPx() * CanvasFadeTuning.blurScale.floatValue)
+                    .let { if (it < 0.5f) 0f else it }
+                val fadeNow = bottomFade * bottomFadeScale().coerceIn(0f, 1f)
+                // Ujung fade ikut turun mengikuti dasar klip yang tumbuh memenuhi view.
+                val fadeEnd = bottomFadeEndPx?.let { it + (bounds.height - it) * fill }
+                if (applied.fadeDiffers(fadeNow, bounds, fadeEnd, blur)) {
+                    view.setBottomFade(fadeNow, bounds, fadeEnd, blur)
                 }
             } else {
-                frame.fadeFraction = bottomFade
+                frame.fadeFraction = bottomFade * bottomFadeScale().coerceIn(0f, 1f)
                 frame.fadeEndPx = bottomFadeEndPx
             }
         },
@@ -633,17 +740,30 @@ private fun TextureView.captureAt(
     if (viewWidth <= 0 || viewHeight <= 0) return null
     val scale = maxPx.toFloat() / maxOf(viewWidth, viewHeight)
     return runCatching {
-        // TextureView.getBitmap copies its texture layer, before the view's
-        // RenderEffect; the pre-31 mask is on the parent frame instead.
-        // Neither display-only fade is baked into the mesh's sampled frame.
-        val frame = if (scale >= 1f) {
-            getBitmap()
-        } else {
-            getBitmap(
-                (viewWidth * scale).roundToInt().coerceAtLeast(1),
-                (viewHeight * scale).roundToInt().coerceAtLeast(1),
-            )
-        } ?: return null
+        // getBitmap hands back the texture as the decoder painted it, stretched
+        // to the view's bounds. The view's setTransform (cover/contain) is a
+        // display-only matrix and is not part of that readback, so read with an
+        // identity transform and run the very same matrix over the result
+        // (see shownFrame). Otherwise the frame comes out stretched, or cropped
+        // from the wrong place, compared with what is on screen.
+        // The pre-31 bottom mask is on the parent frame and the RenderEffect
+        // fade is on the view's node; neither is baked into the sampled frame.
+        val viewTransform = getTransform(null)
+        setTransform(Matrix())
+        val raw: Bitmap? = try {
+            if (scale >= 1f) {
+                getBitmap()
+            } else {
+                getBitmap(
+                    (viewWidth * scale).roundToInt().coerceAtLeast(1),
+                    (viewHeight * scale).roundToInt().coerceAtLeast(1),
+                )
+            }
+        } finally {
+            setTransform(viewTransform)
+        }
+        if (raw == null) return null
+        val frame = shownFrame(raw, clipAspect, contentMode, alignPortraitTop)
         if (contentMode != CanvasContentMode.FIT_PORTRAIT || clipAspect >= 1f || clipAspect <= 0f) {
             return frame
         }
@@ -679,6 +799,7 @@ private suspend fun TextureView.copyStill(
     clipAspect: Float,
     contentMode: CanvasContentMode,
     alignPortraitTop: Boolean,
+    maxSide: Int = 0,
 ): Bitmap? {
     val texture = surfaceTexture ?: return null
     val videoWidth = (video.width * video.pixelWidthHeightRatio).roundToInt()
@@ -695,9 +816,10 @@ private suspend fun TextureView.copyStill(
             maxOf(width.toFloat() / videoWidth, height.toFloat() / videoHeight)
         },
     )
+    val shrink = if (maxSide > 0) minOf(1f, maxSide.toFloat() / maxOf(videoWidth, videoHeight)) else 1f
     val bitmap = Bitmap.createBitmap(
-        (videoWidth * scale).roundToInt().coerceAtLeast(1),
-        (videoHeight * scale).roundToInt().coerceAtLeast(1),
+        (videoWidth * scale * shrink).roundToInt().coerceAtLeast(1),
+        (videoHeight * scale * shrink).roundToInt().coerceAtLeast(1),
         Bitmap.Config.ARGB_8888,
     )
     val result = runCatching {
@@ -737,19 +859,54 @@ private fun TextureView.applyContentTransform(
     clipAspect: Float,
     contentMode: CanvasContentMode,
     alignPortraitTop: Boolean,
+    fill: Float = 0f,
 ): Boolean {
-    val bounds = IntSize(width, height)
-    if (bounds.width <= 0 || bounds.height <= 0 || !clipAspect.isFinite() || clipAspect <= 0f) {
+    val matrix = contentMatrix(width, height, clipAspect, contentMode, alignPortraitTop, fill)?.also { m ->
+        // Geser Y positif: video ikut membesar ke bawah (zoom dari atas) agar
+        // ada gambar yang bisa dilarutkan di bawah dasar klip aslinya.
+        val extra = CanvasFadeTuning.offsetDp.floatValue * resources.displayMetrics.density
+        if (extra > 0.5f && alignPortraitTop &&
+            contentMode == CanvasContentMode.FIT_PORTRAIT && clipAspect < 1f
+        ) {
+            val v = FloatArray(9)
+            m.getValues(v)
+            val bottom = v[Matrix.MSCALE_Y] * height
+            if (bottom > 1f) {
+                val s = (bottom + extra) / bottom
+                m.postScale(s, s, width / 2f, 0f)
+            }
+        }
+    }
+    if (matrix == null) {
         setTransform(Matrix())
         return false
     }
-    val viewAspect = bounds.width.toFloat() / bounds.height
-    val pivotX = bounds.width / 2f
+    setTransform(matrix)
+    return true
+}
+
+/**
+ * The cover/contain matrix for content of [clipAspect] in a [width] x [height]
+ * box, or null while the size or aspect is unknown. One definition for the live
+ * view and for [shownFrame], so a captured frame can never disagree with the
+ * picture on screen. Every term scales with the box, so it holds at any size.
+ */
+private fun contentMatrix(
+    width: Int,
+    height: Int,
+    clipAspect: Float,
+    contentMode: CanvasContentMode,
+    alignPortraitTop: Boolean,
+    fill: Float = 0f,
+): Matrix? {
+    if (width <= 0 || height <= 0 || !clipAspect.isFinite() || clipAspect <= 0f) return null
+    val viewAspect = width.toFloat() / height
+    val pivotX = width / 2f
     val pivotY = if (alignPortraitTop && contentMode == CanvasContentMode.FIT_PORTRAIT && clipAspect < 1f) {
         0f
-    } else bounds.height / 2f
-    val matrix = Matrix().apply {
-        val fit = contentMode == CanvasContentMode.FIT_PORTRAIT && clipAspect < 1f
+    } else height / 2f
+    val fit = contentMode == CanvasContentMode.FIT_PORTRAIT && clipAspect < 1f
+    val base = Matrix().apply {
         if (fit && clipAspect > viewAspect) {
             setScale(1f, viewAspect / clipAspect, pivotX, pivotY)
         } else if (fit) {
@@ -760,8 +917,36 @@ private fun TextureView.applyContentTransform(
             setScale(1f, viewAspect / clipAspect, pivotX, pivotY)
         }
     }
-    setTransform(matrix)
-    return true
+    if (!fit || fill <= 0.001f) return base
+    // Klip portrait yang di-contain tumbuh menjadi crop layar penuh: interpolasi kedua
+    // matriks supaya gambar meluncur, bukan melompat saat mode berganti.
+    val cover = contentMatrix(width, height, clipAspect, CanvasContentMode.CROP, false) ?: return base
+    val from = FloatArray(9)
+    val to = FloatArray(9)
+    base.getValues(from)
+    cover.getValues(to)
+    val t = fill.coerceAtMost(1f)
+    for (i in 0 until 9) from[i] += (to[i] - from[i]) * t
+    return Matrix().apply { setValues(from) }
+}
+
+/**
+ * [raw] (the decoder's frame stretched to the view's bounds) as the view shows
+ * it: through the same matrix, same size, with transparent contain margins.
+ * Returned as is while the clip's aspect is not known yet.
+ */
+private fun shownFrame(
+    raw: Bitmap,
+    clipAspect: Float,
+    contentMode: CanvasContentMode,
+    alignPortraitTop: Boolean,
+): Bitmap {
+    val matrix = contentMatrix(raw.width, raw.height, clipAspect, contentMode, alignPortraitTop)
+        ?: return raw
+    val shown = Bitmap.createBitmap(raw.width, raw.height, Bitmap.Config.ARGB_8888)
+    Canvas(shown).drawBitmap(raw, matrix, Paint(Paint.FILTER_BITMAP_FLAG))
+    raw.recycle()
+    return shown
 }
 
 /**
@@ -777,36 +962,95 @@ private fun TextureView.applyContentTransform(
  * the older way, with a saveLayer and a Porter-Duff mask.
  */
 @RequiresApi(Build.VERSION_CODES.S)
-private fun TextureView.setBottomFade(fraction: Float, bounds: IntSize, endPx: Float?) {
-    val endY = endPx?.coerceIn(0f, bounds.height.toFloat()) ?: bounds.height.toFloat()
+private fun TextureView.setBottomFade(
+    fraction: Float,
+    bounds: IntSize,
+    endPx: Float?,
+    blurPx: Float = 0f,
+) {
+    val offsetPx = CanvasFadeTuning.offsetDp.floatValue * resources.displayMetrics.density
+    val endY = ((endPx ?: bounds.height.toFloat()) + offsetPx)
+        .coerceIn(0f, bounds.height.toFloat())
+    // The blur lives on the view's own RenderNode, like the fade: a Compose
+    // blur layer around a TextureView leaves its frames sharp. Blur first,
+    // then the fade mask, so the edge dissolves the blurred picture.
+    val content = if (blurPx > 0.5f) {
+        RenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
+    } else {
+        RenderEffect.createOffsetEffect(0f, 0f)
+    }
     if (fraction <= 0.001f || endY <= 0f) {
-        setRenderEffect(null)
+        setRenderEffect(if (blurPx > 0.5f) content else null)
         return
     }
     // Along smootherstep, as the still sleeve's banner dissolves, so the clip
     // and a still of it standing in for it end the same way.
-    val gradient = LinearGradient(
-        0f,
-        endY * (1f - fraction.coerceAtMost(1f)),
-        0f,
-        endY,
-        IntArray(FADE_CURVE_STOPS + 1) { i ->
-            android.graphics.Color.argb(1f - smootherStep(i / FADE_CURVE_STOPS.toFloat()), 0f, 0f, 0f)
-        },
-        FloatArray(FADE_CURVE_STOPS + 1) { i -> i / FADE_CURVE_STOPS.toFloat() },
-        Shader.TileMode.CLAMP,
-    )
+    val fadeH = (endY * fraction.coerceAtMost(1f) * CLIP_FADE_HEIGHT_SCALE).coerceAtLeast(1f)
+    val gradient: Shader = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        curvedFadeShader(bounds.width.toFloat(), endY, fadeH, (fadeH + endY * 0.15f) * CLIP_FADE_CURVE)
+    } else {
+        LinearGradient(
+            0f,
+            endY - fadeH,
+            0f,
+            endY,
+            IntArray(FADE_CURVE_STOPS + 1) { i ->
+                android.graphics.Color.argb(
+                    Math.pow(
+                        (1f - smootherStep(i / FADE_CURVE_STOPS.toFloat())).toDouble(),
+                        CLIP_FADE_POWER.toDouble(),
+                    ).toFloat(),
+                    0f,
+                    0f,
+                    0f,
+                )
+            },
+            FloatArray(FADE_CURVE_STOPS + 1) { i -> i / FADE_CURVE_STOPS.toFloat() },
+            Shader.TileMode.CLAMP,
+        )
+    }
     // createOffsetEffect(0, 0) is the identity effect over the node's own
     // content, which is the only way to name "what this view drew" as the
     // destination of a blend.
     setRenderEffect(
         RenderEffect.createBlendModeEffect(
-            RenderEffect.createOffsetEffect(0f, 0f),
+            content,
             RenderEffect.createShaderEffect(gradient),
             BlendMode.DST_IN,
         ),
     )
 }
+
+/**
+ * The curved bottom dissolve as an AGSL alpha mask, in the view's own pixels.
+ * Each column's smootherstep band ends [lift] higher the further it is from
+ * the centre (a parabola), so the fade boundary dips in the middle.
+ */
+private const val CURVED_FADE_AGSL = """
+uniform float width;
+uniform float endY;
+uniform float fadeH;
+uniform float lift;
+uniform float power;
+uniform float curveExp;
+half4 main(float2 p) {
+    float u = clamp(p.x / width, 0.0, 1.0) * 2.0 - 1.0;
+    float t = clamp((p.y - (endY - fadeH - lift * pow(abs(u), curveExp))) / fadeH, 0.0, 1.0);
+    float s = t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    return half4(0.0, 0.0, 0.0, pow(1.0 - s, power));
+}
+"""
+
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+private fun curvedFadeShader(width: Float, endY: Float, fadeH: Float, lift: Float): RuntimeShader =
+    RuntimeShader(CURVED_FADE_AGSL).apply {
+        setFloatUniform("width", width.coerceAtLeast(1f))
+        setFloatUniform("endY", endY)
+        setFloatUniform("fadeH", fadeH.coerceAtLeast(1f))
+        setFloatUniform("lift", lift)
+        setFloatUniform("power", CLIP_FADE_POWER)
+        setFloatUniform("curveExp", CanvasFadeTuning.curveExp.floatValue.coerceAtLeast(0.5f))
+    }
 
 /**
  * The pre-[Build.VERSION_CODES.S] bottom fade: the same dissolve
@@ -833,10 +1077,14 @@ private class AppliedLook {
     private var alignTop = false
     private var width = -1
     private var height = -1
+    private var fillT = Float.NaN
+    private var offsetT = Float.NaN
 
     private var fade = Float.NaN
     private var fadeBounds = IntSize(-1, -1)
     private var fadeEnd: Float? = Float.NaN
+    private var fadeBlur = Float.NaN
+    private var fadeTune = 0
 
     fun transformDiffers(
         clipAspect: Float,
@@ -844,23 +1092,32 @@ private class AppliedLook {
         alignPortraitTop: Boolean,
         viewWidth: Int,
         viewHeight: Int,
+        fill: Float = 0f,
     ): Boolean {
         if (clipAspect == aspect && contentMode == mode && alignPortraitTop == alignTop &&
-            viewWidth == width && viewHeight == height
+            viewWidth == width && viewHeight == height && fill == fillT &&
+            CanvasFadeTuning.offsetDp.floatValue == offsetT
         ) return false
+        offsetT = CanvasFadeTuning.offsetDp.floatValue
         aspect = clipAspect
         mode = contentMode
         alignTop = alignPortraitTop
         width = viewWidth
         height = viewHeight
+        fillT = fill
         return true
     }
 
-    fun fadeDiffers(fraction: Float, bounds: IntSize, endPx: Float?): Boolean {
-        if (fraction == fade && bounds == fadeBounds && endPx == fadeEnd) return false
+    fun fadeDiffers(fraction: Float, bounds: IntSize, endPx: Float?, blur: Float = 0f): Boolean {
+        val tune = CanvasFadeTuning.signature()
+        if (fraction == fade && bounds == fadeBounds && endPx == fadeEnd && blur == fadeBlur &&
+            tune == fadeTune
+        ) return false
+        fadeTune = tune
         fade = fraction
         fadeBounds = bounds
         fadeEnd = endPx
+        fadeBlur = blur
         return true
     }
 }
@@ -963,6 +1220,9 @@ internal fun AndroidCanvasVideo(spec: CanvasVideoSpec, modifier: Modifier) {
         onCoverChanged = spec.onCoverChanged,
         bottomFade = spec.bottomFade,
         bottomFadeEndPx = spec.bottomFadeEndPx,
+        blurPx = spec.blurPx,
+        bottomFadeScale = spec.bottomFadeScale,
+        fillProgress = spec.fillProgress,
         pausedForTransition = spec.pausedForTransition,
         resumeDelayMs = spec.resumeDelayMs,
         startPositionMs = spec.startPositionMs,
@@ -970,6 +1230,7 @@ internal fun AndroidCanvasVideo(spec: CanvasVideoSpec, modifier: Modifier) {
         captureStill = spec.captureStill,
         onStillCaptured = spec.onStillCaptured,
         onResumed = spec.onResumed,
+        frameGrab = spec.frameGrab,
     )
 }
 

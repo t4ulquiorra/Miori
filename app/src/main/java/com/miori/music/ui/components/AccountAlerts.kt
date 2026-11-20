@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -54,8 +55,6 @@ import com.miori.music.data.settings.AppSettings
 import kotlinx.coroutines.launch
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
-import dev.chrisbanes.haze.materials.HazeMaterials
-
 /**
  * Same UIAlertController shape as [UpdateAvailableDialog] — frosted card,
  * hairline rules, full-width stacked actions — but with a text field for the
@@ -885,50 +884,170 @@ private fun ChoiceRow(
 @OptIn(ExperimentalHazeMaterialsApi::class)
 @Composable
 internal fun AlertScaffold(
-    hazeState: HazeState,
+    /** Null for an alert with no [HazeState] to hand; it is then always [alertGlass]. */
+    hazeState: HazeState?,
     onDismiss: () -> Unit,
     /**
      * False for an alert in a window of its own, where [hazeState] has nothing
-     * to blur — Haze reads only its own window. The card is then the plain
-     * surface the reduced-blur setting uses; see [InfoAlert]'s `inOwnWindow`.
+     * to blur — Haze reads only its own window. The card is then [alertGlass],
+     * which samples the app backdrop instead; see [InfoAlert]'s `inOwnWindow`.
      */
     frosted: Boolean = true,
+    /**
+     * The motion driving the card. By default it calls [onDismiss] once the
+     * exit has played; [GlassAlertDialog] passes its own so the window's Back
+     * and the scrim share one reverse animation.
+     */
+    motion: MacOSPopupState = rememberMacOSPopupState(onClosed = onDismiss),
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val shape = RoundedCornerShape(ALERT_CORNER)
+    androidx.activity.compose.BackHandler { motion.requestClose() }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(SCRIM_COLOR)
+            .macOSPopupScrim(motion, SCRIM_COLOR)
             .clickable(
                 indication = null,
                 interactionSource = remember { MutableInteractionSource() },
-                onClick = onDismiss,
+                onClick = motion::requestClose,
             ),
         contentAlignment = Alignment.Center,
     ) {
         Column(
             modifier = Modifier
                 .width(ALERT_WIDTH)
+                .macOSPopupMotion(motion)
+                .jellyPopIn(animateIn = false)
                 .clip(shape)
-                .then(
-                    if (reduceDynamicBlur || !frosted) {
-                        Modifier.background(MaterialTheme.colorScheme.surface)
-                    } else {
-                        Modifier.optimizedHazeEffect(
-                            state = hazeState,
-                            style = HazeMaterials.regular(MaterialTheme.colorScheme.surface),
-                        )
-                    },
-                )
+                .alertSurface(hazeState, frosted, shape)
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() },
                     onClick = {},
                 ),
-            content = content,
+            content = {
+                // The rows fade in once the card has grown out of its trigger.
+                Column(Modifier.fillMaxWidth().macOSPopupContent(motion)) { content() }
+            },
         )
+    }
+}
+
+private const val ALERT_FROST_ALPHA_DARK = 0.80f
+private const val ALERT_FROST_ALPHA_LIGHT = 0.72f
+
+/**
+ * The card of an alert drawn in a window of its own: the same frost as the
+ * audio output popup and the iOS menu ([menuBackdropFrost]), sampling the menu
+ * or app backdrop. Haze cannot do this job — it reads only its own window.
+ * Solid fill where glass is unsupported or under "reduce dynamic blur".
+ */
+@Composable
+internal fun Modifier.alertGlass(shape: RoundedCornerShape): Modifier {
+    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val colors = iosMenuColors()
+    val backdrop = LocalMenuBackdrop.current ?: LocalAppBackdrop.current
+    return if (isGlassSupported() && !reduceDynamicBlur) {
+        menuBackdropFrost(
+            backdrop = backdrop,
+            shape = shape,
+            fill = colors.fill.copy(alpha = if (colors.dark) ALERT_FROST_ALPHA_DARK else ALERT_FROST_ALPHA_LIGHT),
+        )
+    } else {
+        background(colors.fill, shape)
+    }
+}
+
+/**
+ * The one surface every alert card is drawn on: the audio output popup's frost
+ * (backdrop frost in its own window, Haze frost in the activity window, solid
+ * under "reduce dynamic blur") plus the [touchGlow] that follows the finger.
+ * Call it after the card's clip.
+ */
+@Composable
+internal fun Modifier.alertSurface(
+    hazeState: HazeState?,
+    frosted: Boolean,
+    shape: RoundedCornerShape,
+): Modifier {
+    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val colors = iosMenuColors()
+    val surface = when {
+        reduceDynamicBlur -> background(colors.fill)
+        !frosted || hazeState == null -> alertGlass(shape)
+        else -> optimizedHazeEffect(
+            state = hazeState,
+            style = menuFrost(
+                colors.fill,
+                alpha = if (colors.dark) ALERT_FROST_ALPHA_DARK else ALERT_FROST_ALPHA_LIGHT,
+            ),
+        )
+    }
+    return surface.touchGlow()
+}
+
+/**
+ * An alert in a window of its own, for a caller with no [HazeState] to blur
+ * against — a settings page, or a dialog that must sit above another window.
+ * Same scrim and card as every other alert here; [content] is the card's rows.
+ */
+@Composable
+internal fun GlassAlertDialog(
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val motion = rememberMacOSPopupState(onClosed = onDismiss)
+    Dialog(
+        onDismissRequest = motion::requestClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+        // The scaffold draws its own flat scrim; the platform's would double it.
+        SideEffect { window?.setDimAmount(0f) }
+        // Without this the keyboard sits over the actions of an alert with a field.
+        Box(Modifier.imePadding()) {
+            AlertScaffold(hazeState = null, onDismiss = onDismiss, frosted = false, motion = motion, content = content)
+        }
+    }
+}
+
+/** [ConfirmationAlert] in a window of its own: a title, a message, a confirm and a dismiss. */
+@Composable
+internal fun GlassConfirmDialog(
+    title: String,
+    message: String,
+    confirmLabel: String,
+    dismissLabel: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    destructive: Boolean = false,
+) {
+    GlassAlertDialog(onDismiss = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 19.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.W600),
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+            )
+            Text(
+                text = message,
+                modifier = Modifier.padding(top = 4.dp),
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 17.sp),
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center,
+            )
+        }
+        AlertRule()
+        AlertAction(label = confirmLabel, emphasised = true, destructive = destructive, onClick = onConfirm)
+        AlertRule()
+        AlertAction(label = dismissLabel, emphasised = false, onClick = onDismiss)
     }
 }

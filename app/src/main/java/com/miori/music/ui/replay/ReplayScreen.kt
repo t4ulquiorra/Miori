@@ -1,7 +1,5 @@
 package com.miori.music.ui.replay
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -27,8 +25,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.IosShare
+import com.miori.music.ui.icons.SfIcons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -42,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -61,6 +59,7 @@ import com.miori.music.data.model.artworkAt
 import com.miori.music.data.stats.ArtistFacts
 import com.miori.music.data.stats.ReplayPeriod
 import com.miori.music.data.stats.ReplaySummary
+import com.miori.music.ui.components.GlassSegmentedControl
 import com.miori.music.ui.components.PAGE_GUTTER
 import com.miori.music.ui.icons.MioriIcons
 import com.miori.music.ui.player.MeshGradientBackground
@@ -93,8 +92,6 @@ private fun isDarkMode(): Boolean =
 @Composable
 fun ReplayScreen(
     state: ReplayState,
-    /** The signed-in account name embossed on the Replay cards. */
-    holder: String,
     onPeriodChange: (ReplayPeriod) -> Unit,
     onOpenStory: (ReplayStoryPage) -> Unit,
     onPlaySong: (Song) -> Unit,
@@ -187,8 +184,6 @@ fun ReplayScreen(
                     item("cards") {
                         ReplayCardRow(
                             cards = summary.cards(context),
-                            holder = holder,
-                            memberSince = state.memberSince,
                             onCardClick = onOpenStory,
                         )
                     }
@@ -249,7 +244,7 @@ fun ReplayScreen(
                     item("habits") { Habits(summary, dark) }
                     item("share") {
                         ReplayActionRow(
-                            Icons.Rounded.IosShare,
+                            SfIcons.Share,
                             stringResource(R.string.share_my_replay),
                             dark,
                             onShare,
@@ -283,6 +278,10 @@ private fun Heading(state: ReplayState, onPeriodChange: (ReplayPeriod) -> Unit, 
         )
         Spacer(Modifier.height(14.dp))
         PeriodPicker(state.period, onPeriodChange, dark)
+        if (state.period == ReplayPeriod.THIS_MONTH || state.period == ReplayPeriod.THIS_YEAR) {
+            Spacer(Modifier.height(10.dp))
+            AnchorStepper(state, textColor)
+        }
         Spacer(Modifier.height(18.dp))
     }
 }
@@ -298,45 +297,68 @@ private fun Heading(state: ReplayState, onPeriodChange: (ReplayPeriod) -> Unit, 
 @Composable
 private fun PeriodPicker(selected: ReplayPeriod, onSelect: (ReplayPeriod) -> Unit, dark: Boolean) {
     val context = LocalContext.current
-    val textColor = if (dark) Color.White else Color.Black
-    // Four equal shares of the full width, each held to one line. Sized to
-    // their labels instead, the chips ran past the edge on a narrow phone and
-    // the last was squeezed into whatever was left, one letter to a line.
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(textColor.copy(alpha = 0.10f))
-            .padding(3.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    val periods = ReplayPeriod.entries
+    val labels = periods.map { it.localizedTab(context) }
+    // The glass control reads light or dark off the theme's surface, so it is
+    // handed the page's own mode: the Replay page is dark or light as a whole.
+    MaterialTheme(
+        colorScheme = MaterialTheme.colorScheme.copy(surface = if (dark) Color.Black else Color.White),
     ) {
-        ReplayPeriod.entries.forEach { period ->
-            val active = period == selected
-            val background by animateColorAsState(
-                if (active) textColor.copy(alpha = 0.92f) else Color.Transparent,
-                tween(160),
-                label = "periodChip",
-            )
-            Text(
-                text = period.localizedTab(context),
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.W700,
-                color = if (active) if (dark) Color.Black else Color.White else textColor.copy(alpha = 0.75f),
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(background)
-                    .clickable { onSelect(period) }
-                    .padding(horizontal = 6.dp, vertical = 8.dp),
-            )
-        }
+        GlassSegmentedControl(
+            options = labels,
+            selectedIndex = periods.indexOf(selected),
+            onSelect = { onSelect(periods[it]) },
+        )
     }
 }
 
 // ── The cards ───────────────────────────────────────────────────────────────
+
+/**
+ * Steps the month or year being shown back and forth, from the first month
+ * anything was recorded up to the current one.
+ */
+@Composable
+private fun AnchorStepper(state: ReplayState, textColor: Color) {
+    val period = state.period
+    val today = java.time.LocalDate.now()
+    val first = state.firstMonth
+    val canPrev = first != null && when (period) {
+        ReplayPeriod.THIS_MONTH -> java.time.YearMonth.from(state.anchor).isAfter(first)
+        else -> state.anchor.year > first.year
+    }
+    val canNext = !period.stepAnchor(state.anchor, 1L).isAfter(today)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        StepButton(rotated = true, enabled = canPrev, tint = textColor) {
+            state.onAnchorChange(period.stepAnchor(state.anchor, -1L))
+        }
+        Text(
+            text = period.anchorLabel(state.anchor),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.W700,
+            color = textColor,
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
+        StepButton(rotated = false, enabled = canNext, tint = textColor) {
+            state.onAnchorChange(period.stepAnchor(state.anchor, 1L))
+        }
+    }
+}
+
+@Composable
+private fun StepButton(rotated: Boolean, enabled: Boolean, tint: Color, onClick: () -> Unit) {
+    Icon(
+        imageVector = SfIcons.ChevronRight,
+        contentDescription = null,
+        tint = tint.copy(alpha = if (enabled) 0.9f else 0.25f),
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(8.dp)
+            .then(if (rotated) Modifier.rotate(180f) else Modifier),
+    )
+}
 
 /**
  * The wallet of cards, wherever it is drawn.
@@ -349,8 +371,6 @@ private fun PeriodPicker(selected: ReplayPeriod, onSelect: (ReplayPeriod) -> Uni
 @Composable
 internal fun ReplayCardRow(
     cards: List<ReplayHeroCard>,
-    holder: String,
-    memberSince: String?,
     onCardClick: (ReplayStoryPage) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(horizontal = PAGE_GUTTER + 4.dp),
@@ -369,10 +389,8 @@ internal fun ReplayCardRow(
                 value = card.value,
                 detail = card.detail,
                 artworkUrl = card.artworkUrl,
-                holder = holder,
-                memberSince = memberSince,
                 onClick = { onCardClick(card.page) },
-                modifier = Modifier.width(300.dp),
+                modifier = Modifier.width(190.dp),
             )
         }
     }

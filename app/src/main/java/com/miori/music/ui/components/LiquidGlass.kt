@@ -26,6 +26,8 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.miori.music.data.settings.AppSettings
+import com.miori.music.data.settings.GlassClarity
+import com.miori.music.data.settings.GlassCustom
 import com.miori.music.ui.components.backdrop.Backdrop
 import com.miori.music.ui.components.backdrop.backdrops.LayerBackdrop
 import com.miori.music.ui.components.backdrop.drawBackdrop
@@ -45,6 +47,14 @@ val LocalLiquidGlassEnabled = staticCompositionLocalOf { false }
 val LocalAppBackdrop = staticCompositionLocalOf<Backdrop> { error("No AppBackdrop provided") }
 
 /**
+ * Backdrop yang dipakai panel menu yang sedang terbuka (still player, atau still
+ * halaman). Null di luar menu. Dialog di window sendiri yang dibuka dari isi menu,
+ * seperti Song Info, memakainya supaya blur-nya mengambil latar yang sama dengan
+ * menu itu, bukan [LocalAppBackdrop] yang merekam halaman utama di bawah player.
+ */
+internal val LocalMenuBackdrop = compositionLocalOf<Backdrop?> { null }
+
+/**
  * Where a [liquidGlass] surface composed under it also records the glass it
  * draws — the sampled, blurred and tinted backdrop, without its rim or shadow —
  * so a lens above it can refract that surface rather than the page behind it.
@@ -59,35 +69,11 @@ internal val LocalGlassExport = compositionLocalOf<LayerBackdrop?> { null }
  */
 fun isGlassSupported(sdkInt: Int = Build.VERSION.SDK_INT): Boolean = sdkInt >= Build.VERSION_CODES.S
 
-/** Apple-matched defaults (Echo's GlassEffectConfig()), fixed rather than user sliders. */
-private const val VIBRANCY = 1f
-private const val BLUR_RADIUS_DP = 8f
+private const val BLUR_RADIUS_DP = 10f
 private const val LENS_HEIGHT = 0.5f
 private const val LENS_AMOUNT = 0.5f
 private const val LENS_MAX_DP = 48f
-private const val SURFACE_OPACITY = 0.4f
-
-/**
- * Resolution fraction the glass surface records and processes its backdrop at.
- *
- * A third, which is what Echo's `glassResolutionScale` comes to at this blur
- * radius. It was briefly raised to a half while the sharp-text bug was being
- * chased — wrongly, as it turned out: the cause was a transparent backdrop, not
- * the resample (see MainActivity's `paintBackdrop`). A third is nine times fewer
- * pixels than full resolution through the colour matrix, the blur and the lens
- * shader, on as many as six surfaces at once in the middle of a fold, and the
- * blur is what hides the upscale.
- */
-private const val GLASS_RESOLUTION_SCALE = 0.33f
-
-/**
- * The blur and resolution under [AppSettings.glassPerformance]. With no lens to
- * bend what is behind it, the frost alone has to break up a page's text, so it
- * is twice the radius — and that wider blur hides a smaller recording, which
- * takes the surface from about 11% of its pixels to about 6%.
- */
-private const val FROST_BLUR_RADIUS_DP = 16f
-private const val FROST_RESOLUTION_SCALE = 0.25f
+private const val SURFACE_OPACITY = 0.30f
 
 /**
  * The hairline along a bar's edge, and what stands in for the glass rim
@@ -123,13 +109,16 @@ fun glassContentColor(): Color =
 @Composable
 fun glassIndicatorColor(): Color =
     if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) {
-        Color.White.copy(alpha = 0.5f)
+        Color.White.copy(alpha = LIGHT_INDICATOR_OPACITY)
     } else {
         Color.White.copy(alpha = DARK_INDICATOR_OPACITY)
     }
 
 /** The selected tab's pill in dark theme, a step whiter than the bar. */
-private const val DARK_INDICATOR_OPACITY = 0.14f
+private const val DARK_INDICATOR_OPACITY = 0.30f
+
+/** The selected tab's pill in light theme. */
+private const val LIGHT_INDICATOR_OPACITY = 0.65f
 
 /**
  * A lightweight visual match for liquid glass over a stable background.
@@ -151,17 +140,23 @@ fun Modifier.lightweightLiquidGlass(
         Color(0xFF121212)
     }
     val shapeProvider = ShapeProvider { shape }
+    val custom by AppSettings.glassCustom.collectAsStateWithLifecycle()
+    val highlightSpec = remember(custom.rim) { Highlight.Default.copy(alpha = custom.rim) }
 
     return clip(shape)
         .background(
-            color = if (useGlass) glassTint.copy(alpha = SURFACE_OPACITY) else fallbackColor,
+            color = if (useGlass) {
+                glassTint.copy(alpha = (SURFACE_OPACITY * custom.tint).coerceIn(0f, 1f))
+            } else {
+                fallbackColor
+            },
             shape = shape,
         )
         .then(
             if (useGlass) {
                 HighlightElement(
                     shapeProvider = shapeProvider,
-                    highlight = { Highlight.Default },
+                    highlight = { highlightSpec },
                 )
             } else {
                 Modifier
@@ -183,10 +178,12 @@ fun Modifier.lightweightLiquidGlass(
 fun Modifier.liquidGlassRim(shape: CornerBasedShape): Modifier {
     if (!LocalLiquidGlassEnabled.current || !isGlassSupported()) return this
     val shapeProvider = remember(shape) { ShapeProvider { shape } }
+    val custom by AppSettings.glassCustom.collectAsStateWithLifecycle()
+    val highlightSpec = remember(custom.rim) { Highlight.Default.copy(alpha = custom.rim) }
     return then(
         HighlightElement(
             shapeProvider = shapeProvider,
-            highlight = { Highlight.Default },
+            highlight = { highlightSpec },
         ),
     )
 }
@@ -204,10 +201,6 @@ fun Modifier.liquidGlassRim(shape: CornerBasedShape): Modifier {
  * recording the backdrop layer when it is on, and a surface that still tried to
  * sample would be sampling a layer nothing is drawing into.
  *
- * Under [AppSettings.glassPerformance] the lens goes and the blur frosts instead,
- * for phones that can't spare the refraction shader. The vibrancy, tint, rim and
- * shadow are the same either way.
- *
  * [shape] is restricted to [CornerBasedShape] because the backdrop's lens effect
  * throws for any other shape type.
  */
@@ -216,50 +209,84 @@ fun Modifier.liquidGlass(
     shape: CornerBasedShape,
     /** Drawn over the glass in place of the theme's default tint, when set. */
     surfaceTint: Color? = null,
+    /** False keeps the blur, tint and rim but skips the lens that bends what is behind. */
+    refract: Boolean = true,
+    /** Sampled in place of [LocalAppBackdrop], for glass over something the page behind is not. */
+    source: Backdrop? = null,
+    /** Replaces the app-wide glass clarity for this surface only, when set. */
+    clarityOverride: GlassClarity? = null,
+    /** Replaces the app-wide custom glass values for this surface only, when set. */
+    customOverride: GlassCustom? = null,
+    /** Replaces the app-wide frosted setting for this surface only, when set. */
+    frostedOverride: Boolean? = null,
 ): Modifier {
     if (!isGlassSupported()) return this
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val appFrosted by AppSettings.frostedGlass.collectAsStateWithLifecycle()
+    val appClarity by AppSettings.glassClarity.collectAsStateWithLifecycle()
+    val appCustom by AppSettings.glassCustom.collectAsStateWithLifecycle()
+    val frosted = frostedOverride ?: appFrosted
+    val clarity = clarityOverride ?: appClarity
+    val custom = customOverride ?: appCustom
     if (reduceDynamicBlur) {
         return background(MaterialTheme.colorScheme.surface, shape)
             .border(GLASS_EDGE_WIDTH, GLASS_EDGE_COLOR, shape)
     }
-    val glassPerformance by AppSettings.glassPerformance.collectAsStateWithLifecycle()
-    val backdrop = LocalAppBackdrop.current
-    val exportedBackdrop = LocalGlassExport.current
+    val backdrop = source ?: LocalAppBackdrop.current
+    val exportedBackdrop = if (source == null) LocalGlassExport.current else null
     val density = LocalDensity.current
-    val resolutionScale = if (glassPerformance) FROST_RESOLUTION_SCALE else GLASS_RESOLUTION_SCALE
-    val blurRadiusDp = if (glassPerformance) FROST_BLUR_RADIUS_DP else BLUR_RADIUS_DP
-    val blurPx = with(density) { blurRadiusDp.dp.toPx() } * resolutionScale
-    val lensHeightPx = with(density) { (LENS_HEIGHT * LENS_MAX_DP).dp.toPx() } * resolutionScale
-    val lensAmountPx = with(density) { (LENS_AMOUNT * LENS_MAX_DP).dp.toPx() } * resolutionScale
-    val themeTint = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) {
-        Color(0xFFFAFAFA)
+    val resolution = (clarity.resolutionScale * custom.quality).coerceIn(0.2f, 1f)
+    val blurPx = with(density) { BLUR_RADIUS_DP.dp.toPx() } * resolution * clarity.blurScale * custom.blur
+    val lensHeightPx = with(density) { (LENS_HEIGHT * LENS_MAX_DP).dp.toPx() } * resolution * custom.refractionWidth
+    val lensAmountPx = with(density) { (LENS_AMOUNT * LENS_MAX_DP).dp.toPx() } * resolution *
+        clarity.lensScale * custom.refraction
+    val rainbowStrength = custom.rainbowStrength(clarity.chromatic)
+    val highlightSpec = remember(custom.rim) { Highlight.Default.copy(alpha = custom.rim) }
+    val isLightTheme = MaterialTheme.colorScheme.surface.luminance() > 0.5f
+    val shadowSpec = remember(custom.shadow, isLightTheme) {
+        // A light page has nothing darker behind the bar, so the shadow sets it apart.
+        val base = if (isLightTheme) 0.18f else 0.1f
+        Shadow.Default.copy(color = Color.Black.copy(alpha = (base * custom.shadow).coerceIn(0f, 1f)))
+    }
+    val themeTint = if (isLightTheme) {
+        Color(0xFFF2F2F7)
     } else {
         Color(0xFF121212)
     }
-    val surfaceTintColor = surfaceTint ?: themeTint.copy(alpha = SURFACE_OPACITY)
+    val tintAlpha = (clarity.tintAlpha * custom.tint).coerceIn(0f, 1f)
+    // White glass over a white page is invisible, so light theme keeps a minimum fill.
+    val surfaceTintColor = surfaceTint
+        ?: themeTint.copy(alpha = if (isLightTheme) maxOf(tintAlpha, 0.6f) else tintAlpha)
+    // White 10% vanishes against a light page; use a dark hairline there.
+    val edgeColor = if (isLightTheme) {
+        Color.Black.copy(alpha = 0.12f)
+    } else {
+        GLASS_EDGE_COLOR
+    }
 
     return drawBackdrop(
         backdrop = backdrop,
         shape = { shape },
         effects = {
-            colorControls(saturation = 1f + 0.5f * VIBRANCY)
-            blur(blurPx)
-            if (!glassPerformance && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Frosted: hanya saturasi ringan + blur, tanpa lensa (bagian terberat di GPU).
+            colorControls(saturation = (if (frosted) 1.15f else clarity.saturation) * custom.saturation)
+            blur(if (frosted) blurPx * 1.4f else blurPx)
+            if (!frosted && refract && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 lens(
                     refractionHeight = lensHeightPx,
                     refractionAmount = lensAmountPx,
-                    depthEffect = true,
-                    chromaticAberration = true,
+                    depthEffect = custom.depth,
+                    chromaticAberration = rainbowStrength > 0f,
+                    chromaticStrength = rainbowStrength,
                 )
             }
         },
-        highlight = { Highlight.Default },
-        shadow = { Shadow.Default },
+        highlight = { highlightSpec },
+        shadow = { if (frosted && !isLightTheme) null else shadowSpec },
         onDrawSurface = {
             drawRect(color = surfaceTintColor, size = size)
         },
         exportedBackdrop = exportedBackdrop,
-        backdropScale = resolutionScale,
-    )
+        backdropScale = resolution,
+    ).border(GLASS_EDGE_WIDTH, edgeColor, shape)
 }

@@ -1,5 +1,17 @@
 package com.miori.music.ui.screens
 
+import androidx.compose.material.icons.rounded.Extension
+import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.Public
+import androidx.compose.material.icons.rounded.SmartDisplay
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import com.miori.music.ui.player.LocalLyricsMenuPopover
+import com.miori.music.ui.player.LyricsMenuEntry
+
 import com.miori.music.ui.components.trackArtSize
 import androidx.compose.ui.layout.ContentScale
 import com.miori.music.data.model.toSong
@@ -16,7 +28,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import com.miori.music.ui.components.PillSegmentedControl
+import com.miori.music.ui.components.StyledSegmentedControl
 import com.miori.music.ui.components.longPressMenuClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,7 +52,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.NorthWest
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
@@ -48,14 +59,21 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import com.miori.music.data.model.MoodGenre
+import com.miori.music.data.model.MoodGenreSection
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -64,7 +82,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import coil3.compose.AsyncImage
 import com.miori.music.data.model.BrowseItem
@@ -87,6 +104,26 @@ import com.miori.music.ui.components.SongRow
 import com.miori.music.ui.components.SearchPlayingBars
 import com.miori.music.ui.components.thumbnailBorder
 import com.miori.music.ui.components.songListSkeleton
+import androidx.compose.ui.zIndex
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.unit.IntSize
+import kotlin.math.roundToInt
 import java.util.Locale
 
 @Composable
@@ -168,9 +205,40 @@ fun SearchScreen(
      * only while the field is empty: once something is typed the page is
      * about the results, and the switcher would just push them down.
      */
-    sourceSwitcher: (@Composable () -> Unit)? = null,
+    sourceLabels: List<String>? = null,
+    sourceIndex: Int = 0,
+    onSourceSelect: (Int) -> Unit = {},
+    /** Renders the source picker popover with the search screen's own backdrop (supplied by the app). */
+    sourceMenu: (@Composable (Boolean, Rect?, () -> Unit, List<LyricsMenuEntry>) -> Unit)? = null,
+    /** The mood and genre categories, shown while the field is empty and has no focus. */
+    exploreState: UiState<List<MoodGenreSection>>? = null,
+    onCategoryClick: ((MoodGenre) -> Unit)? = null,
+    onExploreRetry: () -> Unit = {},
+    /** Whether the search field has focus; the categories give way to recent searches once it does. */
+    fieldFocused: Boolean = true,
+    /** Applied to the scrolling list; the app uses it to record the list as a blur source. */
+    listModifier: Modifier = Modifier,
+    /** Whether the header band blurs the list under it; false draws a plain scrim instead. */
+    headerBlur: Boolean = true,
+    /** Large "Search" heading at the head of the page while the field is empty and unfocused. */
+    showTitle: Boolean = false,
+    /**
+     * Pixels from the bottom of the page up to the top of a search field that floats
+     * over it (phone, liquid glass), read at layout so it follows the keyboard frame by
+     * frame. Non-null: while suggestions are up they are laid out from the bottom, the
+     * best match right above the field. Null (desktop, other bars): unchanged.
+     */
+    bottomAnchorInset: (() -> Int)? = null,
+    /**
+     * Non-null (phone): while the filter control is showing it rises to this top
+     * padding, up where the profile was, over a frosted header shape with rounded
+     * bottom corners. Null (desktop): the control stays under [topPadding].
+     */
+    filterBarTopPadding: Dp? = null,
 ) {
     val focusRequester = remember { FocusRequester() }
+    var listWidthPx by remember { mutableIntStateOf(0) }
+    val categoryColumns = moodGenreColumns(with(LocalDensity.current) { listWidthPx.toDp() })
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     // Tapping the search tab from the nav bar sets focusRequested;
@@ -198,6 +266,17 @@ fun SearchScreen(
     // appear as a dropdown beneath the text completions rather than floating
     // after the search has committed.
     val showTypeahead = typeaheadResults.isNotEmpty() && suggesting
+    // Suggestions grow upward from the field: the list is reversed, so item 0 sits
+    // against the field and a long typeahead list overflows away from the thumb.
+    val anchored = suggesting && bottomAnchorInset != null
+    // Only a flip resets the scroll; a page that is merely re-entered keeps its place.
+    val anchoredBefore = remember { booleanArrayOf(anchored) }
+    LaunchedEffect(anchored) {
+        if (anchoredBefore[0] != anchored) {
+            anchoredBefore[0] = anchored
+            listState.scrollToItem(0)
+        }
+    }
     LaunchedEffect(listState, results, loadingMore, searchingLibrary, searchingAddons) {
         if (results !is UiState.Success || searchingLibrary || searchingAddons) return@LaunchedEffect
         snapshotFlow {
@@ -207,14 +286,50 @@ fun SearchScreen(
             if (!loadingMore && total > 0 && lastVisible >= total - 4) onLoadMore()
         }
     }
-    Column(modifier = modifier.fillMaxSize()) {
+    val frostFill = MaterialTheme.colorScheme.background
+    // Until onSizeChanged reports, the header is just the top padding it starts
+    // with. Seeding it stops the list drawing one frame at 0 and then jumping down.
+    val seededHeaderPx = with(LocalDensity.current) { topPadding.roundToPx() }
+    var headerHeightPx by remember { mutableIntStateOf(seededHeaderPx) }
+    val filterBarShown = filterBarTopPadding != null && results != null && !suggesting &&
+        !searchingLibrary && !searchingAddons
+    val headerTopPadding by animateDpAsState(
+        targetValue = if (filterBarShown && filterBarTopPadding != null) filterBarTopPadding else topPadding,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "searchHeaderTopPadding",
+    )
+    val headerShapeAlpha by animateFloatAsState(
+        targetValue = if (filterBarShown) 1f else 0f,
+        animationSpec = tween(durationMillis = 260),
+        label = "searchHeaderShapeAlpha",
+    )
+    val headerHeight = with(LocalDensity.current) { headerHeightPx.toDp() }
+    val contentLayer = rememberGraphicsLayer()
+    val blurLayer = rememberGraphicsLayer()
+    val headerFadePx = with(LocalDensity.current) { HEADER_FADE_HEIGHT.toPx() }
+    val headerBlurPx = with(LocalDensity.current) { HEADER_BLUR_RADIUS.toPx() }
+    var sourceMenuOpen by remember { mutableStateOf(false) }
+    var sourceMenuAnchor by remember { mutableStateOf<Rect?>(null) }
+    var rootOrigin by remember { mutableStateOf(Offset.Zero) }
+    Box(modifier = modifier.fillMaxSize().onGloballyPositioned { rootOrigin = it.positionInWindow() }) {
+        // The frosted band behind the filter control is drawn by the list itself
+        // (see frostedHeaderBand), so it shares the list's coordinates and cannot miss it.
         // Search field and filter tabs stay fixed at the top, outside the
         // scrolling list, so they're always reachable rather than scrolling
         // away with the results or recent searches beneath them.
         // The FrostedTopBar is visible on this tab (showing "Search"), so we
         // clear it fully — status bar inset + bar height + breathing gap — so
         // the search field sits cleanly below the bar instead of overlapping it.
-        Column(modifier = Modifier.padding(top = topPadding)) {
+        Column(
+            modifier = Modifier
+                .zIndex(1f)
+                .fillMaxWidth()
+                .onSizeChanged { headerHeightPx = it.height }
+                .padding(top = headerTopPadding),
+        ) {
             if (showField) {
                 SearchField(
                     query = query,
@@ -229,19 +344,13 @@ fun SearchScreen(
                         stringResource(Res.string.search_hint)
                     },
                     modifier = Modifier.padding(start = PAGE_GUTTER, end = PAGE_GUTTER, bottom = 4.dp),
+                    onSourceMenuClick = { rect ->
+                        sourceMenuAnchor = rect
+                        sourceMenuOpen = true
+                    },
                 )
             }
-            if (sourceSwitcher != null) {
-                AnimatedVisibility(
-                    visible = query.isEmpty(),
-                    enter = fadeIn() + expandVertically(),
-                    exit = fadeOut() + shrinkVertically(),
-                ) {
-                    Box(Modifier.padding(start = PAGE_GUTTER, end = PAGE_GUTTER, bottom = 4.dp)) {
-                        sourceSwitcher()
-                    }
-                }
-            }
+
             // The filters only mean something once there is a result set to narrow;
             // they stay up for an empty or failed search too, or picking a filter
             // that finds nothing would take away the control needed to leave it.
@@ -249,20 +358,92 @@ fun SearchScreen(
             // The same selector as the sources above it and a folder's tabs, so
             // the app has one look for "pick one of these".
             if (results != null && !suggesting && !searchingLibrary && !searchingAddons) {
-                PillSegmentedControl(
+                StyledSegmentedControl(
                     options = SearchFilter.entries.map { it.label },
                     selectedIndex = filter.ordinal,
                     onSelect = { onFilterChange(SearchFilter.entries[it]) },
-                    modifier = Modifier.padding(start = PAGE_GUTTER, end = PAGE_GUTTER, bottom = 6.dp),
+                    modifier = Modifier.padding(
+                        start = PAGE_GUTTER,
+                        end = PAGE_GUTTER,
+                        bottom = 6.dp,
+                    ),
                 )
             }
         }
 
+        // Source picker: the lyrics globe popover, hosted at the screen root so the
+        // anchor and the blur both line up with the globe in the field.
+        if (sourceLabels != null && sourceMenu != null) {
+            val sourceIcons = listOf(Icons.Rounded.SmartDisplay, Icons.Rounded.LibraryMusic, Icons.Rounded.Extension)
+            val sourceEntries = sourceLabels.mapIndexed { index, label ->
+                LyricsMenuEntry(
+                    label = label,
+                    icon = sourceIcons.getOrElse(index) { Icons.Rounded.Public },
+                    enabled = true,
+                    onClick = {
+                        sourceMenuOpen = false
+                        onSourceSelect(index)
+                    },
+                    selected = index == sourceIndex,
+                )
+            }
+            val anchorInRoot = sourceMenuAnchor?.translate(-rootOrigin.x, -rootOrigin.y)
+            sourceMenu(sourceMenuOpen, anchorInRoot, { sourceMenuOpen = false }, sourceEntries)
+        }
+
         LazyColumn(
             state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding()),
+            modifier = Modifier
+                .fillMaxSize()
+                .frostedHeaderBand(
+                    contentLayer = contentLayer,
+                    blurLayer = blurLayer,
+                    blurEnabled = headerBlur,
+                    bandHeightPx = { headerHeightPx.toFloat() },
+                    amount = { headerShapeAlpha },
+                    fadePx = headerFadePx,
+                    blurRadiusPx = headerBlurPx,
+                    fill = frostFill,
+                )
+                .then(listModifier)
+                .onSizeChanged { listWidthPx = it.width },
+            reverseLayout = anchored,
+            // Anchored, the bottom room is the live inset item below, and the top keeps a
+            // little extra so the first row at the end of the scroll clears the fade.
+            contentPadding = PaddingValues(
+                top = headerHeight + if (anchored) ANCHORED_FADE_HEIGHT else 0.dp,
+                bottom = if (anchored) 0.dp else contentPadding.calculateBottomPadding(),
+            ),
         ) {
+            // The big title scrolls with the list, the way the New page's heading does.
+            item {
+                AnimatedVisibility(
+                    // Lifted by [SEARCH_TITLE_LIFT] so the heading sits where New's does;
+                    // the height shrinks with it, so everything below rises with the title.
+                    modifier = Modifier.layout { measurable, constraints ->
+                        val placeable = measurable.measure(constraints)
+                        val lift = SEARCH_TITLE_LIFT.roundToPx()
+                        layout(placeable.width, (placeable.height - lift).coerceAtLeast(0)) {
+                            placeable.place(0, -lift)
+                        }
+                    },
+                    visible = showTitle && query.isEmpty() && results == null && !fieldFocused,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
+                    Text(
+                        text = stringResource(Res.string.search),
+                        style = MaterialTheme.typography.displayLarge,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier.padding(
+                            start = PAGE_GUTTER,
+                            end = PAGE_GUTTER,
+                            top = 8.dp,
+                            bottom = 14.dp,
+                        ),
+                    )
+                }
+            }
             when {
                 searchingLibrary || searchingAddons -> librarySearchResults(
                     query = query.trim(),
@@ -281,6 +462,17 @@ fun SearchScreen(
                     onBlockedSongClick = onBlockedSongClick,
                 )
                 suggesting -> {
+                    if (bottomAnchorInset != null) {
+                        // First item of the reversed list: the room under it down to the
+                        // field, measured at layout so the rows ride up with the keyboard.
+                        item(key = "suggestions:field-inset") {
+                            Spacer(
+                                Modifier.layout { _, constraints ->
+                                    layout(constraints.maxWidth, bottomAnchorInset().coerceAtLeast(0)) {}
+                                },
+                            )
+                        }
+                    }
                     searchSuggestions(
                         suggestions = suggestions,
                         // Picking one is done typing, so the keyboard comes down
@@ -296,6 +488,7 @@ fun SearchScreen(
                             typeaheadResults = typeaheadResults,
                             onSongClick = { song -> onTopResultPlay(song) },
                             onSongLongPress = onTypeaheadLongPress,
+                            onSongSwipe = onSongSwipe,
                             onBrowseClick = { item ->
                                 onBrowseClick(item)
                             },
@@ -304,6 +497,13 @@ fun SearchScreen(
                         )
                     }
                 }
+                results == null && !fieldFocused && query.isEmpty() &&
+                    exploreState != null && onCategoryClick != null -> moodGenreGrid(
+                    state = exploreState,
+                    columns = categoryColumns,
+                    onCategoryClick = onCategoryClick,
+                    onRetry = onExploreRetry,
+                )
                 results == null -> if (history.isEmpty()) {
                     item { MessageState(stringResource(Res.string.search_empty)) }
                 } else {
@@ -353,10 +553,12 @@ fun SearchScreen(
                                     modifier = Modifier.padding(
                                         start = PAGE_GUTTER,
                                         end = PAGE_GUTTER,
-                                        top = 16.dp,
-                                        bottom = 6.dp,
+                                        top = 20.dp,
+                                        bottom = 8.dp,
                                     ),
-                                    style = MaterialTheme.typography.titleSmall,
+                                    style = MaterialTheme.typography.titleLarge.copy(
+                                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                    ),
                                     color = MaterialTheme.colorScheme.onSurface,
                                 )
                             }
@@ -409,8 +611,118 @@ fun SearchScreen(
                 }
             }
         }
+        // Rows leaving through the top fade out instead of being cut by the top bar.
+        // Drawn over the list and never touched, so it takes no input.
+        if (anchored) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .fillMaxWidth()
+                    .height(topPadding + ANCHORED_FADE_HEIGHT)
+                    .zIndex(1f)
+                    .background(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            0f to frostFill.copy(alpha = 0.9f),
+                            0.5f to frostFill.copy(alpha = 0.55f),
+                            1f to frostFill.copy(alpha = 0f),
+                        ),
+                    ),
+            )
+        }
     }
 }
+
+/** The soft top edge of the anchored suggestion list; also the room kept for it. */
+private val ANCHORED_FADE_HEIGHT = 24.dp
+
+/** Height of the soft fade below the frosted header band behind the filter control. */
+private val HEADER_FADE_HEIGHT = 48.dp
+
+/** Blur radius of the frosted header band. */
+private val HEADER_BLUR_RADIUS = 24.dp
+
+/**
+ * Draws the list, then a frosted band over its top [bandHeightPx]: the page colour
+ * under a blurred copy of the same list, so rows scroll away into frost beneath the
+ * filter control. Below the control the band keeps its blur but fades out over [fadePx]
+ * instead of ending in a hard edge. The list is recorded once and the blur layer
+ * redraws that recording, so the band is in the list's own coordinates. [amount] fades
+ * the band in and out; with [blurEnabled] false it is a plain scrim instead.
+ */
+private fun Modifier.frostedHeaderBand(
+    contentLayer: GraphicsLayer,
+    blurLayer: GraphicsLayer,
+    blurEnabled: Boolean,
+    bandHeightPx: () -> Float,
+    amount: () -> Float,
+    fadePx: Float,
+    blurRadiusPx: Float,
+    fill: Color,
+): Modifier = drawWithContent {
+    val a = amount()
+    val solidH = bandHeightPx().coerceAtMost(size.height)
+    if (a <= 0.01f || solidH <= 0f) {
+        drawContent()
+        return@drawWithContent
+    }
+    val bandH = (solidH + fadePx).coerceAtMost(size.height)
+    val bandSize = androidx.compose.ui.geometry.Size(size.width, bandH)
+    // Fade dimulai sedikit di bawah tepi kontrol dan memakai kurva smoothstep,
+    // bukan garis lurus, supaya tidak ada tepi datar yang terasa.
+    val fadeStart = ((solidH - fadePx * 0.3f) / bandH).coerceIn(0f, 0.95f)
+    val fadeSpan = 1f - fadeStart
+    val mask = androidx.compose.ui.graphics.Brush.verticalGradient(
+        colorStops = arrayOf(
+            0f to Color.Black,
+            fadeStart to Color.Black,
+            fadeStart + fadeSpan * 0.25f to Color.Black.copy(alpha = 0.84f),
+            fadeStart + fadeSpan * 0.5f to Color.Black.copy(alpha = 0.5f),
+            fadeStart + fadeSpan * 0.75f to Color.Black.copy(alpha = 0.16f),
+            1f to Color.Transparent,
+        ),
+        startY = 0f,
+        endY = bandH,
+    )
+    // Draws [block] into an offscreen layer, then multiplies it by the fade mask.
+    fun masked(block: () -> Unit) {
+        drawContext.canvas.saveLayer(Rect(0f, 0f, size.width, bandH), androidx.compose.ui.graphics.Paint())
+        block()
+        drawRect(
+            brush = mask,
+            size = bandSize,
+            blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+        )
+        drawContext.canvas.restore()
+    }
+    if (!blurEnabled) {
+        drawContent()
+        masked { drawRect(fill.copy(alpha = 0.82f * a), size = bandSize) }
+        return@drawWithContent
+    }
+    val w = size.width.roundToInt().coerceAtLeast(1)
+    contentLayer.record(size = IntSize(w, size.height.roundToInt().coerceAtLeast(1))) {
+        this@drawWithContent.drawContent()
+    }
+    drawLayer(contentLayer)
+    // The band plus enough below it for the blur to sample real rows at its edge.
+    val sampleH = (bandH + blurRadiusPx * 2f).coerceAtMost(size.height).roundToInt().coerceAtLeast(1)
+    blurLayer.clip = true
+    blurLayer.renderEffect = BlurEffect(null, blurRadiusPx, blurRadiusPx, TileMode.Clamp)
+    blurLayer.alpha = a
+    blurLayer.record(size = IntSize(w, sampleH)) { drawLayer(contentLayer) }
+    masked {
+        drawRect(fill.copy(alpha = 0.7f * a), size = bandSize)
+        drawLayer(blurLayer)
+        drawRect(fill.copy(alpha = 0.3f * a), size = bandSize)
+    }
+}
+
+/**
+ * How far the Search heading is raised to meet New's: that page lifts everything by
+ * HOME_TITLE_LIFT (28dp) from a content start of bar + 12dp, this one starts at
+ * bar + 4dp with the same 8dp above its heading, so the difference is 20dp.
+ */
+private val SEARCH_TITLE_LIFT = 20.dp
 
 private data class SearchSection(val title: String?, val rows: List<SearchResult>)
 
@@ -525,8 +837,10 @@ private fun TopResultCard(
             .contextClick(onLongPress),
     ) {
         Text(
-            text = "Top result",
-            style = MaterialTheme.typography.labelLarge,
+            text = stringResource(Res.string.search_top_result),
+            style = MaterialTheme.typography.titleLarge.copy(
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+            ),
             color = MaterialTheme.colorScheme.onSurface,
         )
         Spacer(Modifier.height(10.dp))
@@ -690,6 +1004,7 @@ private fun LazyListScope.searchTypeaheadDropdown(
     typeaheadResults: List<SearchResult>,
     onSongClick: (Song) -> Unit,
     onSongLongPress: ((Song) -> Unit)?,
+    onSongSwipe: ((Song) -> Unit)? = null,
     onBrowseClick: (BrowseItem) -> Unit,
     currentSong: Song?,
     isPlaying: Boolean,
@@ -717,6 +1032,7 @@ private fun LazyListScope.searchTypeaheadDropdown(
                 song = result.song,
                 onClick = { onSongClick(result.song) },
                 onLongPress = onSongLongPress?.let { { it(result.song) } },
+                onSwipeToQueue = onSongSwipe?.let { { it(result.song) } },
                 isCurrent = isCurrentRow(result.song),
                 isPlaying = isPlaying && isCurrentRow(result.song),
             )
@@ -729,6 +1045,7 @@ private fun LazyListScope.searchTypeaheadDropdown(
                 song = result.song,
                 onClick = { onSongClick(result.song) },
                 onLongPress = onSongLongPress?.let { { it(result.song) } },
+                onSwipeToQueue = onSongSwipe?.let { { it(result.song) } },
                 isCurrent = isCurrentRow(result.song),
                 isPlaying = isPlaying && isCurrentRow(result.song),
             )
@@ -745,12 +1062,19 @@ private fun TypeaheadSongRow(
     song: Song,
     onClick: () -> Unit,
     onLongPress: (() -> Unit)? = null,
+    onSwipeToQueue: (() -> Unit)? = null,
     isCurrent: Boolean = false,
     isPlaying: Boolean = false,
 ) {
+    SwipeToQueueBox(
+        onSwipeToQueue = onSwipeToQueue,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // Opak agar latar swipe tidak tembus saat baris digeser.
+            .then(if (onSwipeToQueue != null) Modifier.background(MaterialTheme.colorScheme.background) else Modifier)
             .longPressMenuClickable(
                 onClick = onClick,
                 onLongClick = onLongPress,
@@ -791,6 +1115,7 @@ private fun TypeaheadSongRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
     }
 }
 
@@ -847,6 +1172,13 @@ private fun LazyListScope.recentSearches(
             onRemove = { onRemove(entity.id) },
             onSwipeToQueue = song?.let { { onSongSwipe(it) } },
         )
+        if (entity != history.last()) {
+            HorizontalDivider(
+                modifier = Modifier.padding(start = ROW_DIVIDER_INSET),
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
     }
 }
 
@@ -918,6 +1250,13 @@ private fun LazyListScope.recentAddonSearches(
                     modifier = Modifier.size(18.dp),
                 )
             }
+        }
+        if (term != history.last()) {
+            HorizontalDivider(
+                modifier = Modifier.padding(start = PAGE_GUTTER + 38.dp),
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outline,
+            )
         }
     }
 }

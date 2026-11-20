@@ -1,7 +1,6 @@
 package com.miori.music.playback
 
 import android.net.Uri
-import android.util.Log
 import com.miori.music.data.TrackLog
 import com.miori.music.data.NerdStats
 import com.miori.music.data.sources.SourceResolver
@@ -208,7 +207,7 @@ object QualityUpgrade {
         // played. [SourceResolver.upgradeFor] applies the real quality bar.
         if (target.title.isBlank() || target.isVideo ||
             mediaId in refused ||
-            !SourceResolver.canSubstituteForYouTube()
+            !SourceResolver.canSubstituteForYouTube(mediaId)
         ) {
             inFlight?.cancel()
             return false
@@ -296,7 +295,7 @@ object QualityUpgrade {
         // Same widening as [settledForLess]: a track playing off the cache is
         // worth a second look whenever anything outranks YouTube, not only
         // when lossless was asked for.
-        return SourceResolver.canSubstituteForYouTube()
+        return SourceResolver.canSubstituteForYouTube(mediaId)
     }
 
     /**

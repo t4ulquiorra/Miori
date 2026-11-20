@@ -36,10 +36,10 @@ import com.metrolist.innertubex.extraction.StreamResolveException
 import com.miori.music.data.Http
 import com.miori.music.data.TrackLog
 import com.miori.music.data.innertube.InnerTubeXResolver
+import com.miori.music.playback.MusicOnlyPlayback
 import com.miori.music.data.model.Song
 import com.miori.music.data.settings.AppSettings
 import com.miori.music.playback.ChunkedDataSource
-import com.miori.music.playback.MusicOnlyPlayback
 import com.miori.music.playback.toSong
 import com.miori.music.ui.rememberIsForeground
 import kotlinx.coroutines.CancellationException
@@ -144,9 +144,6 @@ object MusicVideoEngine {
                 refused.clear()
                 refresh()
             }
-        }
-        scope.launch {
-            AppSettings.preferMusicOnly.drop(1).collect { refresh() }
         }
     }
 

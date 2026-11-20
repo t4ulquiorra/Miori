@@ -5,7 +5,6 @@ import com.miori.music.data.model.PlaybackSourceType
 import com.miori.music.data.model.QueueTier
 import com.miori.music.data.model.Song
 import com.miori.music.playback.QueueCoordinator
-import com.miori.music.playback.QueueCoordinator.asQueueEntry
 import com.miori.music.playback.QueueSource
 import com.miori.music.ui.screens.matching
 import org.junit.Assert.assertEquals

@@ -24,7 +24,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -36,14 +35,20 @@ import com.miori.music.ui.components.SHELF_CARD_WIDTH
 import com.miori.music.ui.components.ShelfRow
 import com.miori.music.ui.components.contextClick
 import com.miori.music.ui.components.longPressMenuClickable
+import com.miori.music.ui.components.shelfStagger
 import com.miori.music.ui.components.thumbnailBorder
 import com.miori.music.ui.player.MeshGradientBackground
 import com.miori.music.ui.player.MeshPalette
-import com.miori.music.ui.theme.ArtworkKeyColors
+
+/*
+ * Baris "Mixed for you" bergaya sampul Apple Music: kartu persegi dengan latar
+ * cairan berwarna, label kecil "Music", dan nama mix ("Chill" / "Mix") di pojok
+ * kiri atas. Satu baris yang digeser ke samping.
+ */
 
 /**
- * Mix cover background provider: (palette, motionAllowed, modifier).
- * Android app provides the AGSL shader [OrganicFluidBackground]; other targets fallback to mesh gradient.
+ * Latar sampul mix: (palet, boleh bergerak, modifier). Android mengisinya dengan
+ * shader AGSL (OrganicFluidBackground); tanpa itu dipakai mesh gradient statis.
  */
 val LocalMixCoverBackground =
     staticCompositionLocalOf<(@Composable (List<Color>, Boolean, Modifier) -> Unit)?> { null }
@@ -53,7 +58,7 @@ private val MixCorner = RoundedCornerShape(12.dp)
 private fun ShelfItem.isMixItem(): Boolean =
     browseId?.removePrefix("VL")?.startsWith("RDTMAK") == true
 
-/** Shelf containing mostly mixes (e.g. Mixed for you). */
+/** Shelf yang isinya (hampir semuanya) mix: My Supermix, Discover Mix, My Mix 1, dst. */
 internal fun HomeShelf.isMixShelf(): Boolean =
     items.isNotEmpty() && items.count { it.isMixItem() } * 2 >= items.size
 
@@ -63,21 +68,23 @@ internal fun MixCoverShelf(
     onItemClick: (ShelfItem) -> Unit,
     onItemLongPress: ((ShelfItem) -> Unit)?,
 ) {
-    val rowState = androidx.compose.foundation.lazy.rememberLazyListState()
     Column(Modifier.padding(bottom = 26.dp)) {
         SectionHeader(shelf.title, shelf.subtitle)
+        val rowState = rememberShelfListState("mix:${shelf.title}")
         PausedWhileScrolling(rowState) {
             ShelfRow(
                 state = rowState,
                 contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                itemsIndexed(shelf.items) { _, item ->
-                    MixCoverCard(
-                        item = item,
-                        onClick = { onItemClick(item) },
-                        onLongPress = onItemLongPress?.let { { it(item) } },
-                    )
+                itemsIndexed(shelf.items) { index, item ->
+                    Box(Modifier.shelfStagger(index)) {
+                        MixCoverCard(
+                            item = item,
+                            onClick = { onItemClick(item) },
+                            onLongPress = onItemLongPress?.let { { it(item) } },
+                        )
+                    }
                 }
             }
         }
@@ -168,7 +175,7 @@ private fun MixCoverCard(
     }
 }
 
-/** "Chill Mix" -> ("Chill", "Mix"); "My Mix 1" -> ("My Mix", "1"); else title as is. */
+/** "Chill Mix" -> ("Chill", "Mix"); "My Mix 1" -> ("My Mix", "1"); lainnya apa adanya. */
 fun splitMixTitle(title: String): Pair<String, String?> {
     val words = title.trim().split(' ').filter { it.isNotEmpty() }
     if (words.size >= 2) {
@@ -180,19 +187,21 @@ fun splitMixTitle(title: String): Pair<String, String?> {
     return title.trim() to null
 }
 
-val PinkMix = listOf(Color(0xFFFF0055), Color(0xFFF00035), Color(0xFFFF696F), Color(0xFFFF9B91), Color(0xFFFFB0B8))
-val PurpleMix = listOf(Color(0xFF5B1FD1), Color(0xFF8E2DE2), Color(0xFFB65CFF), Color(0xFF3A1C71), Color(0xFFD27BFF))
-val TealMix = listOf(Color(0xFF1E5AA8), Color(0xFF2BB3B1), Color(0xFF4FD1B5), Color(0xFF3A8DDE), Color(0xFF8FE3E0))
-val IndigoMix = listOf(Color(0xFF0A1FD6), Color(0xFF2F6BFF), Color(0xFF5FA8FF), Color(0xFF1A1F8F), Color(0xFF8FC3FF))
-val OrangeMix = listOf(Color(0xFFE8431C), Color(0xFFFF7A1A), Color(0xFFFFC53D), Color(0xFFD62E1F), Color(0xFFFF9A5C))
-val GreenMix = listOf(Color(0xFF12B886), Color(0xFF2EC4B6), Color(0xFF5BE3A5), Color(0xFF0B7A75), Color(0xFF9AF0C4))
-val MixCycle = listOf(TealMix, OrangeMix, IndigoMix, GreenMix, PurpleMix)
+private val PinkMix = listOf(Color(0xFFFF0055), Color(0xFFF00035), Color(0xFFFF696F), Color(0xFFFF9B91), Color(0xFFFFB0B8))
+private val PurpleMix = listOf(Color(0xFF5B1FD1), Color(0xFF8E2DE2), Color(0xFFB65CFF), Color(0xFF3A1C71), Color(0xFFD27BFF))
+private val TealMix = listOf(Color(0xFF1E5AA8), Color(0xFF2BB3B1), Color(0xFF4FD1B5), Color(0xFF3A8DDE), Color(0xFF8FE3E0))
+private val IndigoMix = listOf(Color(0xFF0A1FD6), Color(0xFF2F6BFF), Color(0xFF5FA8FF), Color(0xFF1A1F8F), Color(0xFF8FC3FF))
+private val OrangeMix = listOf(Color(0xFFE8431C), Color(0xFFFF7A1A), Color(0xFFFFC53D), Color(0xFFD62E1F), Color(0xFFFF9A5C))
+private val GreenMix = listOf(Color(0xFF12B886), Color(0xFF2EC4B6), Color(0xFF5BE3A5), Color(0xFF0B7A75), Color(0xFF9AF0C4))
+private val MixCycle = listOf(TealMix, OrangeMix, IndigoMix, GreenMix, PurpleMix)
 
-fun mixKeyColors(title: String): ArtworkKeyColors {
+/** Warna halaman sebuah mix: latar dari warna dasar cairannya, aksen dari warna terangnya. */
+fun mixKeyColors(title: String): com.miori.music.ui.theme.ArtworkKeyColors {
     val base = mixPalette(title)
-    return ArtworkKeyColors(background = base[0], accent = base[2])
+    return com.miori.music.ui.theme.ArtworkKeyColors(background = base[0], accent = base[2])
 }
 
+/** Warna per jenis mix; "My Mix N" bergilir supaya tiap kartu di baris berbeda warna. */
 fun mixPalette(title: String): List<Color> {
     val t = title.lowercase()
     return when {
@@ -207,15 +216,4 @@ fun mixPalette(title: String): List<Color> {
             MixCycle[n % MixCycle.size]
         }
     }
-}
-
-fun mixContrastPalette(base: List<Color>): List<Color> {
-    fun at(i: Int) = base[i % base.size]
-    return listOf(
-        lerp(at(3), Color.Black, 0.62f),
-        at(1),
-        lerp(at(2), Color.White, 0.45f),
-        at(0),
-        lerp(at(0), Color.Black, 0.35f),
-    )
 }

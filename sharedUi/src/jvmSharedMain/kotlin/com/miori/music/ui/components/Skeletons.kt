@@ -104,7 +104,7 @@ private fun SkeletonLine(fraction: Float, height: Dp, modifier: Modifier = Modif
 @Composable
 fun SectionHeaderSkeleton(index: Int = 0) {
     Column(Modifier.padding(horizontal = PAGE_GUTTER, vertical = 10.dp)) {
-        SkeletonLine(fraction = TitleWidths[index % TitleWidths.size] * 0.7f, height = 18.dp)
+        SkeletonLine(fraction = TitleWidths[index % TitleWidths.size] * 0.7f, height = 22.dp)
     }
 }
 
@@ -140,6 +140,72 @@ fun LazyListScope.songListSkeleton(
     items(count, key = { "$keyPrefix:$it" }) { index ->
         Box(Modifier.graphicsLayer { this.alpha = alpha }) {
             SongRowSkeleton(index = index, circular = circular)
+        }
+    }
+}
+
+/**
+ * The lead shelf on Home and Explore: near-page-width cards that page sideways.
+ *
+ * Both carousels below are built on a [LazyRow] with scrolling off rather than a
+ * plain [Row], so a card running past the right edge is measured and clipped
+ * exactly as the real shelf's is — which is the whole point of a skeleton.
+ */
+@Composable
+private fun HeroShelfSkeleton() {
+    Column(Modifier.padding(bottom = 26.dp)) {
+        SectionHeaderSkeleton()
+        BoxWithConstraints {
+            val cardWidth = heroCardWidth(maxWidth)
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                userScrollEnabled = false,
+            ) {
+                items(2) {
+                    ShimmerBox(
+                        modifier = Modifier.width(cardWidth).aspectRatio(HERO_CARD_RATIO),
+                        shape = RoundedCornerShape(18.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The editorial shelf that leads Explore: a title and subtitle, then wide
+ * 1.5-ratio cards under a two-line caption, the next card peeking in at the
+ * edge. Mirrors the real shelf's metrics so the grid below does not jump.
+ */
+@Composable
+fun EditorialShelfSkeleton() {
+    Column(Modifier.padding(bottom = 26.dp)) {
+        Column(Modifier.padding(horizontal = PAGE_GUTTER, vertical = 10.dp)) {
+            SkeletonLine(fraction = 0.5f, height = 22.dp)
+            Spacer(Modifier.height(8.dp))
+            SkeletonLine(fraction = 0.66f, height = 14.dp)
+        }
+        BoxWithConstraints {
+            val cardWidth = maxWidth - PAGE_GUTTER - 36.dp
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                userScrollEnabled = false,
+            ) {
+                items(2) { card ->
+                    Column(Modifier.width(cardWidth)) {
+                        SkeletonLine(fraction = TitleWidths[card % TitleWidths.size], height = 16.dp)
+                        Spacer(Modifier.height(4.dp))
+                        SkeletonLine(fraction = SubtitleWidths[card % SubtitleWidths.size] + 0.3f, height = 14.dp)
+                        Spacer(Modifier.height(8.dp))
+                        ShimmerBox(
+                            modifier = Modifier.fillMaxWidth().aspectRatio(1.5f),
+                            shape = RoundedCornerShape(16.dp),
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -182,13 +248,7 @@ private fun RecentsHeaderSkeleton() {
     }
 }
 
-/**
- * The compact carousel of square cards.
- *
- * Built on a [LazyRow] with scrolling off rather than a plain [Row], so a card
- * running past the right edge is measured and clipped exactly as the real
- * shelf's is — which is the whole point of a skeleton.
- */
+/** The compact carousel of square cards used by every shelf below the first. */
 @Composable
 fun ShelfSkeleton(index: Int = 0, cardWidth: Dp = SHELF_CARD_WIDTH, cardCorner: Dp = 12.dp) {
     Column(Modifier.padding(bottom = 26.dp)) {
@@ -215,9 +275,16 @@ fun ShelfSkeleton(index: Int = 0, cardWidth: Dp = SHELF_CARD_WIDTH, cardCorner: 
 }
 
 /** Home and Explore while the first page of shelves is still loading. */
-fun LazyListScope.feedSkeleton(shelves: Int = 3) {
-    items(shelves, key = { "skeleton:shelf:$it" }) { index ->
-        ShelfSkeleton(index = index)
+fun LazyListScope.feedSkeleton(shelves: Int = 3, firstIsHero: Boolean = true) {
+    if (firstIsHero) {
+        item(key = "skeleton:hero") { HeroShelfSkeleton() }
+        items(shelves - 1, key = { "skeleton:shelf:$it" }) { index ->
+            ShelfSkeleton(index = index + 1)
+        }
+    } else {
+        items(shelves, key = { "skeleton:shelf:$it" }) { index ->
+            ShelfSkeleton(index = index)
+        }
     }
 }
 
@@ -241,8 +308,8 @@ fun ReplayCardRowSkeleton(modifier: Modifier = Modifier) {
     ) {
         items(2) {
             ShimmerBox(
-                modifier = Modifier.width(300.dp).aspectRatio(1.586f),
-                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.width(190.dp).aspectRatio(1.35f),
+                shape = RoundedCornerShape(16.dp),
             )
         }
     }
@@ -253,6 +320,40 @@ fun LazyListScope.librarySkeleton() {
     item(key = "skeleton:library:shelf") { ShelfSkeleton() }
     item(key = "skeleton:library:header") { SectionHeaderSkeleton(index = 1) }
     songListSkeleton(count = 7, keyPrefix = "skeleton:library:song")
+}
+
+/**
+ * Placeholders for the pinned playlists at the head of the Library page: the
+ * same three-across grid, spacing and square cards as the real one, so the
+ * pins land in place instead of popping in and pushing the page down.
+ */
+@Composable
+fun PinnedGridSkeleton(count: Int) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = PAGE_GUTTER)
+            .padding(top = 4.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        (0 until count).toList().chunked(3).forEach { rowIndexes ->
+            Row(horizontalArrangement = Arrangement.spacedBy(LIBRARY_GRID_SPACING)) {
+                rowIndexes.forEach { index ->
+                    Column(Modifier.weight(1f)) {
+                        ShimmerBox(
+                            modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                            shape = RoundedCornerShape(12.dp),
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        SkeletonLine(fraction = TitleWidths[index % TitleWidths.size], height = 13.dp)
+                        Spacer(Modifier.height(6.dp))
+                        SkeletonLine(fraction = SubtitleWidths[index % SubtitleWidths.size], height = 11.dp)
+                    }
+                }
+                repeat(3 - rowIndexes.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
 }
 
 /** The Play / Shuffle pair, which only appears once there is something to play. */
@@ -278,16 +379,24 @@ private fun DetailActionsSkeleton(isArtist: Boolean) {
  * An album, playlist or artist page below its header — the header itself is
  * drawn from what the row that was tapped already knew, so it never waits.
  */
+/** The skeleton dissolves when the real rows land, rather than vanishing. */
+private fun androidx.compose.foundation.lazy.LazyItemScope.skeletonLeave(): Modifier =
+    Modifier.animateItem(
+        fadeInSpec = null,
+        placementSpec = null,
+        fadeOutSpec = androidx.compose.animation.core.tween(durationMillis = 200),
+    )
+
 fun LazyListScope.detailSkeleton(isArtist: Boolean) {
     if (isArtist) {
         item(key = "skeleton:detail:actions") {
-            Column(Modifier.graphicsLayer { alpha = 0.4f }) {
+            Column(skeletonLeave().enterReveal(540).graphicsLayer { alpha = 0.4f }) {
                 DetailActionsSkeleton(isArtist = true)
                 Spacer(Modifier.height(22.dp))
             }
         }
         item(key = "skeleton:detail:top") {
-            Column(Modifier.graphicsLayer { alpha = 0.4f }) {
+            Column(skeletonLeave().enterReveal(600).graphicsLayer { alpha = 0.4f }) {
                 SectionHeaderSkeleton()
                 // Top songs page four at a time — see [trackColumnWidth] for how
                 // wide a page lands.
@@ -308,7 +417,7 @@ fun LazyListScope.detailSkeleton(isArtist: Boolean) {
             }
         }
         item(key = "skeleton:detail:sections") {
-            Box(Modifier.graphicsLayer { alpha = 0.4f }) {
+            Box(skeletonLeave().enterReveal(660).graphicsLayer { alpha = 0.4f }) {
                 ShelfSkeleton(index = 2, cardCorner = 10.dp)
             }
         }

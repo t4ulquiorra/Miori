@@ -1,6 +1,5 @@
 package com.miori.music.ui.player
 
-import com.miori.music.wear.WearBridge
 import android.content.Context
 import android.database.ContentObserver
 import android.media.AudioManager
@@ -10,7 +9,9 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -23,15 +24,15 @@ import com.miori.music.data.lyrics.LyricsTranslation
 import com.miori.music.data.model.Song
 import com.miori.music.data.settings.AppSettings
 import com.miori.music.data.settings.LastPlayerScreen
-import com.miori.music.playback.MusicOnlyPlayback
+import com.miori.music.data.sources.DeviceCodecs
 import com.miori.music.playback.AudioOutputStatus
 import com.miori.music.playback.AudioRouting
 import com.miori.music.playback.audio.bitperfect.BitPerfectOutput
 import com.miori.music.playback.audio.bitperfect.DacVolume
 import com.miori.music.playback.cast.CastController
-import com.miori.music.ui.components.backdrop.backdrops.SnapshotBackdrop
-import com.miori.music.ui.components.backdrop.backdrops.rememberSnapshotBackdrop
-import com.miori.music.ui.components.backdrop.backdrops.snapshotBackdropSource
+import com.miori.music.ui.components.backdrop.backdrops.LayerBackdrop
+import com.miori.music.ui.components.backdrop.backdrops.layerBackdrop
+import com.miori.music.ui.components.backdrop.backdrops.rememberLayerBackdrop
 import com.miori.music.ui.components.isGlassSupported
 import com.miori.music.ui.components.menuBackdropFrost
 import dev.chrisbanes.haze.HazeState
@@ -70,54 +71,65 @@ class AndroidPlayerHost(context: Context) : PlayerHost {
         override val hideVolumeBar get() = AppSettings.hideVolumeBar
         override val hideStatusBar get() = AppSettings.hideStatusBarInPlayer
         override val lastPlayerScreen get() = AppSettings.lastPlayerScreen
-        override val playerTheme get() = AppSettings.playerTheme
+        override val legacyMeshGradient get() = AppSettings.legacyMeshGradient
         override val lyricsBlur get() = AppSettings.lyricsBlur
+        override val liquidFlow get() = AppSettings.liquidFlow
         override val lyricsOffsetMs get() = AppSettings.lyricsOffsetMs
         override val lyricsSourceOrder get() = AppSettings.lyricsSourceOrder
         override val meteredConnection get() = AppSettings.meteredConnection
         override val streamCeilingOverride get() = AppSettings.streamCeilingOverride
         override val preferUsbDac get() = AppSettings.preferUsbDac
-        override val prioritizeSpotifyCanvas get() = AppSettings.prioritizeSpotifyCanvas
+        override val canvasProviderOrder get() = AppSettings.canvasProviderOrder
         override val reduceAnimation get() = AppSettings.reduceAnimation
+        override val coverSlideAnimation get() = AppSettings.coverSlideAnimation
+        override val coverFluidAnimation get() = AppSettings.coverFluidAnimation
+        override val coverMixOnlyEffects get() = AppSettings.coverMixOnlyEffects
         override val reduceDynamicBlur get() = AppSettings.reduceDynamicBlur
-        override val disableBlendEffects get() = AppSettings.disableBlendEffects
+        override val canvasLiveBlurPanels get() = AppSettings.canvasLiveBlurPanels
+        override val dolbyAtmosActive: StateFlow<Boolean> =
+            combine(AppSettings.dolbyAtmos, BitPerfectOutput.ready) { enabled, bitPerfect ->
+                DeviceCodecs.playsDolbyAtmos && enabled && !bitPerfect
+            }.stateIn(scope, SharingStarted.Eagerly, DeviceCodecs.atmosWanted)
         override val showNerdStats get() = AppSettings.showNerdStats
         override val showListenTogetherButton get() = AppSettings.showListenTogetherButton
         override val smartAnalysis get() = AppSettings.smartAnalysis
         override val automixDetail get() = AppSettings.automixDetail
         override val smartFadeEnabled get() = AppSettings.smartFadeEnabled
         override val smartMixInProgress get() = AppSettings.smartMixInProgress
+        override val crossfadeRunning get() = AppSettings.crossfadeRunning
+        override val skipCrossfadeMs get() = AppSettings.skipCrossfadeMs
+        override val mixFadeMs get() = AppSettings.mixFadeMs
+        override val mixIncomingArtworkUrl get() = AppSettings.mixIncomingArtworkUrl
         override val smartMixBlend get() = AppSettings.smartMixBlend
         override val smartMixView get() = AppSettings.smartMixView
         override val smartMixProgress get() = AppSettings.smartMixProgress
-        override val smartMixPreview get() = AppSettings.smartMixPreview
         override val smartTransitionWindow get() = AppSettings.smartTransitionWindow
         override val spotifyCanvasAutoHide get() = AppSettings.spotifyCanvasAutoHide
         override val syncedLyrics get() = AppSettings.syncedLyrics
+        override val lyricStrip get() = AppSettings.lyricStrip
         override val translationLanguage get() = AppSettings.translationLanguage
         override val versionAlignmentInProgress get() = AppSettings.versionAlignmentInProgress
 
         override fun setLastPlayerScreen(value: LastPlayerScreen) = AppSettings.setLastPlayerScreen(value)
         override fun setLyricsOffsetMs(value: Int) = AppSettings.setLyricsOffsetMs(value)
-        override fun setMixViewOpen(open: Boolean) {
-            AppSettings.mixViewOpen.value = open
-        }
     }
 
     override fun cachedCanvas(song: Song): CanvasArtwork? = CanvasRepository.cached(song)
+
+    override fun cachedCanvasOnDisk(song: Song): CanvasArtwork? = CanvasRepository.cachedOnDisk(song)
 
     override suspend fun canvasFor(song: Song): CanvasArtwork? = CanvasRepository.canvasFor(song)
 
     @Composable
     override fun CanvasVideo(spec: CanvasVideoSpec, modifier: Modifier) = AndroidCanvasVideo(spec, modifier)
 
-    override val musicVideoSupported: Boolean get() = true
+    // Dimatikan oleh setelan "Sampul, bukan video": pemutar lalu menampilkan cover
+    // diam, dan tidak ada permukaan video yang dibuat untuk lagu bertipe video.
+    override val musicVideoSupported: Boolean get() = !AppSettings.stillVideoCovers.value
 
     @Composable
     override fun MusicVideo(videoId: String, fit: Boolean, onRenderedChanged: (Boolean) -> Unit, modifier: Modifier) =
         AndroidMusicVideo(videoId, fit, onRenderedChanged, modifier)
-
-    override fun showsMusicVideoPicture(videoId: String): Boolean = MusicOnlyPlayback.showsPicture(videoId)
 
     override val musicVideoAspect: StateFlow<Float> get() = MusicVideoEngine.aspect
 
@@ -137,10 +149,9 @@ class AndroidPlayerHost(context: Context) : PlayerHost {
     override fun rememberAudioOutputs(): List<AudioOutputDevice> {
         val outputs = rememberAndroidAudioOutputs()
         val cast by CastController.state.collectAsStateWithLifecycle()
-        val watch by WearBridge.watchOutput.collectAsStateWithLifecycle()
         // While a receiver is the speaker no output of this phone is the one
-        // playing, so none of them is lit; the Cast or watch row is.
-        return if (cast.casting || watch.active) outputs.map { it.copy(isActive = false) } else outputs
+        // playing, so none of them is lit; the Cast row is.
+        return if (cast.casting) outputs.map { it.copy(isActive = false) } else outputs
     }
 
     @Composable
@@ -151,22 +162,6 @@ class AndroidPlayerHost(context: Context) : PlayerHost {
         // is let go of, and the music carries on here if it was playing.
         if (CastController.state.value.casting) CastController.disconnect(resumeHere = true)
         AudioRouting.select(id)
-        WearBridge.leaveWatchOutput()
-    }
-
-    override val watchOutput: StateFlow<WatchOutputUi> by lazy {
-        WearBridge.watchOutput
-            .map { WatchOutputUi(available = it.available, name = it.name, active = it.active) }
-            .stateIn(scope, SharingStarted.Eagerly, WatchOutputUi())
-    }
-
-    override fun refreshWatchOutput() = WearBridge.refreshWatchOutput(app)
-
-    override fun selectWatchOutput() {
-        // One speaker at a time: a receiver lets go first, quietly, and the
-        // watch picks the queue up from where the phone's player is.
-        if (CastController.state.value.casting) CastController.disconnect(resumeHere = false)
-        WearBridge.selectWatchOutput()
     }
 
     override val outputFormat: StateFlow<OutputFormatUi> by lazy {
@@ -230,13 +225,22 @@ class AndroidPlayerHost(context: Context) : PlayerHost {
             isPlaying = isPlaying,
         )
 
-    // The ⋯ menu's own material: a still of the player, blurred under each
+    // The ⋯ menu's own material: the player recorded live, blurred under each
     // panel exactly as [menuBackdropFrost] blurs it under the menu. Below
     // Android 12 there is no RenderEffect to blur it with.
+    override fun toggleAutomix() {
+        when {
+            AppSettings.smartFadeEnabled.value -> AppSettings.setSmartFadeEnabled(false)
+            com.miori.music.playback.smart.AutomixModels.downloading.value ->
+                com.miori.music.playback.smart.AutomixModels.cancel()
+            else -> com.miori.music.playback.smart.AutomixModels.start(app)
+        }
+    }
+
     @Composable
     override fun rememberPlayerFrost(): PlayerFrost? {
         if (!isGlassSupported()) return null
-        val backdrop = rememberSnapshotBackdrop()
+        val backdrop = rememberLayerBackdrop()
         return remember(backdrop) { BackdropPlayerFrost(backdrop) }
     }
 
@@ -295,12 +299,10 @@ private class CastAwareVolume(
         system.level,
         CastController.volume,
         CastController.state.map { it.casting },
-        WearBridge.watchOutput,
         DacVolume.level,
-    ) { phone, receiver, casting, watch, dac ->
+    ) { phone, receiver, casting, dac ->
         when {
             casting -> receiver
-            watch.active -> watch.volume
             // Direct USB: the music stream no longer reaches the DAC, so its
             // own hardware volume is the only one that means anything.
             dac != null -> dac
@@ -312,7 +314,6 @@ private class CastAwareVolume(
     override fun set(level: Float) {
         when {
             CastController.state.value.casting -> CastController.setVolume(level)
-            WearBridge.watchOutput.value.active -> WearBridge.setWatchVolume(level)
             DacVolume.level.value != null -> DacVolume.set(level)
             else -> system.set(level)
         }
@@ -354,13 +355,21 @@ private class MusicStreamVolume(private val context: Context) : SystemVolume {
     }
 }
 
-private class BackdropPlayerFrost(private val backdrop: SnapshotBackdrop) : PlayerFrost {
+private class BackdropPlayerFrost(private val backdrop: LayerBackdrop) : PlayerFrost {
+    // The player is recorded only while a drawer or popup is up over it, so a
+    // player with nothing over it pays nothing for the live frost.
+    private var recording by mutableStateOf(false)
+
     @Composable
-    override fun Modifier.frostSource(): Modifier = snapshotBackdropSource(backdrop)
+    override fun Modifier.frostSource(): Modifier = if (recording) layerBackdrop(backdrop) else this
 
-    override fun capture() = backdrop.capture()
+    override fun capture() {
+        recording = true
+    }
 
-    override fun release() = backdrop.release()
+    override fun release() {
+        recording = false
+    }
 
     override fun Modifier.frostPanel(shape: Shape, fill: Color): Modifier = menuBackdropFrost(backdrop, shape, fill)
 }

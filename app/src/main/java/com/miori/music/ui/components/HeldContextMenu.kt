@@ -28,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -49,11 +50,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.miori.music.data.settings.AppSettings
-import com.miori.music.ui.player.additiveChrome
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 import kotlin.math.roundToInt
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The menu a *held* item lifts into, in the shape Apple Music uses: the item
@@ -97,6 +101,12 @@ fun <T : Any> HeldContextMenu(
     val shown = requested ?: last ?: return
     val (menuItem, heldItem) = shown
     val open = requested != null
+    // Set by a tap on the lifted card: its plate and menu go at once, so the
+    // cover flying out of it is all that is left of it.
+    var launched by remember { mutableStateOf(false) }
+    // The tapped card stays up, as lifted, until its cover is in the air: it
+    // goes only when the flying picture can take over, never into a gap.
+    var cardHeld by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
     val appReduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
@@ -107,10 +117,13 @@ fun <T : Any> HeldContextMenu(
     }
     val reduceMotion = appReduceAnimation || systemAnimationsOff
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val touch = rememberIosMenuTouch(reduceMotion)
 
     val progress = remember { Animatable(0f) }
     LaunchedEffect(open) {
         if (open) {
+            launched = false
+            cardHeld = false
             progress.animateTo(
                 1f,
                 if (reduceMotion) {
@@ -122,10 +135,26 @@ fun <T : Any> HeldContextMenu(
                 },
             )
         } else {
-            progress.animateTo(
-                0f,
-                tween(durationMillis = if (reduceMotion) 110 else 230, easing = FastOutSlowInEasing),
-            )
+            val holdForFlight = launched && coverFlightPending()
+            cardHeld = holdForFlight
+            coroutineScope {
+                // The page behind and the menu leave at once; only the card waits.
+                launch {
+                    progress.animateTo(
+                        0f,
+                        tween(
+                            durationMillis = if (reduceMotion) 110 else if (launched) 150 else 230,
+                            easing = FastOutSlowInEasing,
+                        ),
+                    )
+                }
+                if (holdForFlight) {
+                    withTimeoutOrNull(CARD_HOLD_MS) {
+                        snapshotFlow { coverFlightAirborne() || !coverFlightPending() }.first { it }
+                    }
+                    cardHeld = false
+                }
+            }
             last = null
         }
     }
@@ -133,7 +162,6 @@ fun <T : Any> HeldContextMenu(
     BackHandler(enabled = open, onBack = onDismiss)
 
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val plain by AppSettings.disableBlendEffects.collectAsStateWithLifecycle()
     // Plain white or black at half strength, so the blur shows through as
     // frost rather than the surface greys reading as a flat slab over it. With
     // no blur behind there is nothing for that to frost, so the plate firms up
@@ -204,7 +232,14 @@ fun <T : Any> HeldContextMenu(
                     .border(0.5.dp, hairline, cardShape)
                     .then(
                         if (onPreviewClick != null) {
-                            Modifier.clickable(enabled = open) { onPreviewClick(menuItem) }
+                            Modifier.clickable(enabled = open) {
+                                launched = true
+                                onPreviewClick(menuItem)
+                                // Penerbangan sudah terdaftar di sini: kartu tetap tampil
+                                // sejak frame ini juga, tanpa celah alpha 0 sebelum
+                                // LaunchedEffect sempat menahan kartu.
+                                cardHeld = coverFlightPending()
+                            }
                         } else {
                             Modifier
                         },
@@ -227,10 +262,10 @@ fun <T : Any> HeldContextMenu(
                     // The same frosted plate the held item sits on, so the
                     // item and its menu read as one thing lifted off the page.
                     .iosMenuPanel(fillOverride = plate, rimOverride = hairline)
+                    .iosMenuTouchHost(touch, iosMenuColors().pressed)
                     .padding(vertical = 8.dp),
             ) {
-                // Added onto the plate, on a dark one only: see [IosMenuPopover].
-                Column(Modifier.additiveChrome(dark && !plain)) {
+                IosMenuScrollEnvironment(touch) {
                     actions(menuItem)
                 }
             }
@@ -283,6 +318,14 @@ fun <T : Any> HeldContextMenu(
         }
         val visualCenterX = visualLeft + visualW / 2f
         val visualCenterY = visualTop + visualH / 2f
+        LiftedPreview.held = heldItem.bounds
+        LiftedPreview.pictureLeft = overlayOffset.x + visualLeft + pad * liftScale
+        LiftedPreview.pictureTop = overlayOffset.y + visualTop + pad * liftScale
+        LiftedPreview.scale = liftScale
+        LiftedPreview.held = heldItem.bounds
+        LiftedPreview.pictureLeft = overlayOffset.x + visualLeft + pad * liftScale
+        LiftedPreview.pictureTop = overlayOffset.y + visualTop + pad * liftScale
+        LiftedPreview.scale = liftScale
 
         // The menu hangs off the item's nearer edge: its start for an item on
         // the left of the screen, its end for one on the right — a grid's
@@ -308,11 +351,11 @@ fun <T : Any> HeldContextMenu(
         layout(width, height) {
             backdrop.place(0, 0)
             card.placeWithLayer(cardX, cardY) {
-                val p = progress.value
+                val p = if (cardHeld) 1f else progress.value
                 if (reduceMotion) {
                     scaleX = liftScale
                     scaleY = liftScale
-                    alpha = p.coerceIn(0f, 1f)
+                    alpha = if (launched && !cardHeld) 0f else p.coerceIn(0f, 1f)
                 } else {
                     val scale = lerp(1f, liftScale, p)
                     scaleX = scale
@@ -321,12 +364,12 @@ fun <T : Any> HeldContextMenu(
                     translationY = lerp(fromDy, 0f, p)
                     // Quick, because it starts over the very item it copies:
                     // only the plate and shadow arriving are new.
-                    alpha = (p * 3f).coerceIn(0f, 1f)
+                    alpha = if (launched && !cardHeld) 0f else (p * 3f).coerceIn(0f, 1f)
                 }
             }
             menu.placeWithLayer(menuX, menuY) {
                 val p = progress.value
-                alpha = ((p - 0.1f) / 0.9f).coerceIn(0f, 1f)
+                alpha = if (launched) 0f else ((p - 0.1f) / 0.9f).coerceIn(0f, 1f)
                 if (!reduceMotion) {
                     // Grows out of the corner nearest the item, and travels
                     // with it.
@@ -339,6 +382,7 @@ fun <T : Any> HeldContextMenu(
                     scaleY = scale
                     translationX = lerp(fromDx, 0f, p)
                     translationY = lerp(fromDy, 0f, p)
+                    applyIosMenuJelly(touch, scale, if (alignEnd) 1f else 0f, if (menuBelow) 0f else 1f)
                 }
             }
         }
@@ -346,6 +390,9 @@ fun <T : Any> HeldContextMenu(
 }
 
 private val CARD_RADIUS = 20.dp
+
+/** The longest a tapped card waits for its cover to take off before it goes anyway. */
+private const val CARD_HOLD_MS = 1000L
 
 private suspend fun PointerInputScope.swallowAll() {
     awaitPointerEventScope {

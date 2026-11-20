@@ -1,10 +1,10 @@
 package com.miori.music
 
+import androidx.compose.ui.unit.sp
+
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -30,17 +30,19 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -50,18 +52,15 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
-import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.material.icons.Icons
@@ -69,21 +68,18 @@ import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.IosShare
+import com.miori.music.ui.icons.SfIcons
 import androidx.compose.material.icons.rounded.MoreHoriz
-import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Upgrade
 import com.miori.music.data.listentogether.ServerConnectionState
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -104,22 +100,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -137,7 +131,6 @@ import com.miori.music.data.NerdStats
 import com.miori.music.data.TrackLog
 import com.miori.music.data.innertube.InnertubeParser
 import com.miori.music.data.model.BrowseType
-import com.miori.music.data.model.HomeShelf
 import com.miori.music.data.model.LikeStatus
 import com.miori.music.data.model.PlaybackSourceType
 import com.miori.music.data.model.SearchFilter
@@ -156,21 +149,28 @@ import com.miori.music.data.model.durationMillis
 import com.miori.music.data.scrobbling.LastFM
 import com.miori.music.data.settings.AppSettings
 import com.miori.music.data.settings.BitPerfectMode
+import com.miori.music.data.settings.LastPlayerScreen
 import com.miori.music.ui.AddonBlockedAlert
 import com.miori.music.data.settings.LibrarySort
 import com.miori.music.data.settings.ThemeMode
 import com.miori.music.ui.components.AccountProfileSelector
+import com.miori.music.ui.components.JellyMenuBody
+import com.miori.music.ui.components.iosMenuJelly
+import com.miori.music.ui.components.jellyMenuRow
+import com.miori.music.ui.components.rememberJellyMenuTouch
 import com.miori.music.ui.components.DacVolumeHud
-import com.miori.music.ui.components.DacVolumeKeys
 import com.miori.music.ui.components.LocalPlayingBarsMotion
 import com.miori.music.ui.components.handleDacVolumeKey
 import com.miori.music.ui.components.VolumeHud
 import com.miori.music.ui.navigation.AppDestination
+import com.miori.music.ui.components.CoverFlightHost
+import com.miori.music.ui.components.CoverFlightLayer
+import com.miori.music.ui.components.LocalCoverVisibilityScope
 import com.miori.music.ui.navigation.AppRoute
 import com.miori.music.ui.screens.EqualizerPresetPage
+import com.miori.music.ui.screens.SettingsChoiceKind
 import com.miori.music.ui.screens.SettingsChoicePage
 import com.miori.music.ui.components.SpotifyImportAlert
-import com.miori.music.ui.screens.WearOsScreen
 import com.miori.music.ui.screens.AccountAndScrobblingScreen
 import com.miori.music.ui.screens.DiscordDialog
 import com.miori.music.ui.screens.DiscordDialogHost
@@ -188,7 +188,6 @@ import com.miori.music.ui.screens.SignatureApiEditor
 import com.miori.music.ui.screens.SettingsScreen
 import com.miori.music.ui.screens.SourceEditorAlert
 import com.miori.music.ui.screens.SourcesScreen
-import com.miori.music.data.sources.TrackMatcher
 import com.miori.music.ui.screens.SpotifyCanvasAuthScreen
 import com.miori.music.ui.screens.SpotifyLibraryScreen
 import com.miori.music.data.spotify.SPOTIFY_PAGE_PREFIX
@@ -197,7 +196,6 @@ import com.miori.music.playback.LinkRequest
 import com.miori.music.playback.MusicLink
 import com.miori.music.playback.OriginalVersion
 import com.miori.music.playback.PlayerDeepLink
-import com.miori.music.playback.QueueBuilder
 import com.miori.music.playback.QueueCoordinator
 import com.miori.music.playback.QueueCoordinator.asQueueEntry
 import com.miori.music.playback.QueueShuffle
@@ -205,7 +203,6 @@ import com.miori.music.playback.QueueSource
 import com.miori.music.playback.cast.CastController
 import com.miori.music.data.model.QueueTier
 import com.miori.music.playback.autoplayEnabledFor
-import com.miori.music.playback.autoplaySectionStart
 import com.miori.music.playback.beginRadioQueue
 import com.miori.music.playback.commitRadioQueue
 import com.miori.music.playback.fromAutoplay
@@ -217,14 +214,12 @@ import com.miori.music.playback.playBoundedContext
 import com.miori.music.playback.contextEntryKey
 import com.miori.music.playback.toMediaItem
 import com.miori.music.playback.toSong
-import com.miori.music.playback.toDirectYouTubeMediaItem
 import com.miori.music.playback.toggleAutoplay
 import com.miori.music.playback.toggleShuffle
 import com.miori.music.playback.upgradeQuality
 import com.miori.music.playback.revertToOriginal
 import com.miori.music.playback.swapToVersion
 import com.miori.music.playback.smart.VersionAudioAligner
-import com.miori.music.download.DownloadSession
 import com.miori.music.download.DownloadStore
 import com.miori.music.download.MediaTagger
 import com.miori.music.download.DownloadTarget
@@ -239,9 +234,16 @@ import com.miori.music.ui.components.ReorderPlaylistPage
 import com.miori.music.ui.components.LongPressOrigin
 import com.miori.music.ui.components.MenuAnchor
 import com.miori.music.ui.components.menuAnchor
+import com.miori.music.ui.components.macOSPopupMorph
+import com.miori.music.ui.components.IosMenuPlacement
 import com.miori.music.ui.components.IosMenuPopover
+import com.miori.music.ui.components.IosMenuRow
+import com.miori.music.ui.components.SourceMenuRequest
 import com.miori.music.ui.components.SongActionsMenu
 import com.miori.music.ui.components.HeldContextMenu
+import com.miori.music.ui.components.cancelCoverFlight
+import com.miori.music.ui.components.coverFlightPagesOpen
+import com.miori.music.ui.components.startCoverFlightFor
 import com.miori.music.ui.components.HeldItem
 import androidx.media3.session.MediaController
 import com.miori.music.playback.QualityUpgrade
@@ -256,31 +258,60 @@ import com.miori.music.ui.components.FloatingBarsTapGuard
 import com.miori.music.ui.components.BottomTab
 import com.miori.music.ui.components.FLOATING_BAR_MAX_WIDTH
 import com.miori.music.ui.components.FloatingBottomBar
+import com.miori.music.ui.components.GlassMiniPlayer
 import com.miori.music.ui.components.GlassNavBar
+import com.miori.music.ui.components.GlassSearchBar
+import com.miori.music.ui.components.searchMiniRise
+import com.miori.music.ui.components.searchMiniHide
+import androidx.compose.ui.layout.layout
+import com.miori.music.ui.components.GlassSearchMorph
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.WindowInsets
 import com.miori.music.ui.components.floatingtabbar.rememberFloatingTabBarScrollConnection
 import com.miori.music.ui.components.FrostedTopBar
 import com.miori.music.ui.components.LastfmLoginAlert
 import com.miori.music.ui.components.LocalAppBackdrop
+import com.miori.music.ui.components.AppSegmentedControlStyle
 import com.miori.music.ui.components.LocalLiquidGlassEnabled
+import com.miori.music.ui.components.LocalSegmentedControlStyle
 import com.miori.music.ui.components.backdrop.backdrops.LayerBackdrop
 import com.miori.music.ui.components.backdrop.backdrops.layerBackdrop
 import com.miori.music.ui.components.backdrop.backdrops.rememberLayerBackdrop
 import com.miori.music.ui.components.backdrop.backdrops.rememberSnapshotBackdrop
+import com.miori.music.ui.components.backdrop.backdrops.SnapshotBackdrop
+import com.miori.music.ui.components.backdrop.Backdrop
+import androidx.compose.runtime.staticCompositionLocalOf
 import com.miori.music.ui.components.backdrop.backdrops.snapshotBackdropSource
+
+import com.miori.music.ui.components.backdrop.drawPlainBackdrop
+import com.miori.music.ui.components.backdrop.effects.blur
 import com.miori.music.ui.components.isGlassSupported
 import com.miori.music.data.sources.SourceConfig
 import com.miori.music.data.sources.SourceKind
 import com.miori.music.data.sources.SourceRegistry
-import com.miori.music.ui.components.ChoiceAlert
 import com.miori.music.ui.components.ListenBrainzTokenAlert
 import com.miori.music.ui.components.MiniPlayer
 import com.miori.music.ui.components.QueueActionNotice
 import com.miori.music.ui.components.QueueActionNoticeHost
 import com.miori.music.ui.components.TopBarAccountButton
 import com.miori.music.ui.screens.SegmentedControl
+import com.miori.music.ui.screens.LocalMostPlayedArt
+import com.miori.music.ui.player.LocalMotionLyricLine
+import com.miori.music.ui.player.LocalLyricsGlassDisc
+import com.miori.music.ui.components.lyricsGlassDiscSurface
+import com.miori.music.ui.components.lyricsGlassSource
+import com.miori.music.ui.player.LocalLyricsGlassSource
+import com.miori.music.ui.player.LocalLyricsMenuPopover
+import androidx.compose.material.icons.rounded.Check
+import com.miori.music.ui.player.LocalQueueInfoPopover
+import com.motion.lyrics.MotionLyricLine
+import com.motion.lyrics.toMotionWords
 import com.miori.music.ui.screens.LocalMixCoverBackground
 import com.miori.music.ui.components.OrganicFluidBackground
+import com.miori.music.ui.screens.MostPlayedArt
 import com.miori.music.ui.components.SearchField
+import com.miori.music.ui.components.SearchBottomField
 import com.miori.music.sharedui.resources.Res as SharedRes
 import com.miori.music.sharedui.resources.search_hint
 import com.miori.music.sharedui.resources.search_addons_hint
@@ -290,12 +321,16 @@ import com.miori.music.ui.components.optimizedHazeEffect
 import com.miori.music.ui.components.topBarContentPadding
 import com.miori.music.ui.components.topBarHeight
 import com.miori.music.ui.components.AppLanguageDialog
+import com.miori.music.ui.components.HomeLayoutDialog
 import com.miori.music.ui.components.TranslationLanguageDialog
+import com.miori.music.ui.components.CanvasProvidersDialog
 import com.miori.music.ui.components.LyricsSourcesDialog
 import com.miori.music.ui.components.ServerEditorHost
 import com.miori.music.ui.components.UpdateAvailableDialog
 import com.miori.music.ui.components.WebDavConflictAlert
 import com.miori.music.ui.components.FieldConfig
+import com.miori.music.ui.icons.LocalCloseIcon
+import com.miori.music.ui.icons.LocalShareIcon
 import com.miori.music.ui.icons.MioriIcons
 import androidx.media3.common.Player
 import com.miori.music.data.YtMusicRepository
@@ -305,34 +340,25 @@ import com.miori.music.data.model.TopPickKind
 import com.miori.music.data.model.TopPickMood
 import com.miori.music.ui.screens.MoodGridPage
 import com.miori.music.ui.player.NowPlayingScreen
-import com.miori.music.ui.player.MixViewRequest
 import com.miori.music.ui.player.MusicVideoEngine
 import com.miori.music.ui.player.PlayerSheetMotion
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.window.DialogWindowProvider
-import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.Outline
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.draw.drawWithContent
+import com.miori.music.ui.player.AddSongsRequest
+import com.miori.music.ui.components.AddSongsDialog
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.ui.unit.Density
-import androidx.compose.material3.SheetState
-import androidx.compose.material3.SheetValue
-import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.foundation.layout.offset
-import com.miori.music.ui.components.MiniPlayerPull
+import com.miori.music.ui.player.PlayerPanel
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.layout.onSizeChanged
 import com.miori.music.ui.player.LocalPlayerDock
+import com.miori.music.ui.player.recedeBehindPlayer
+import com.miori.music.ui.player.skipDrawWhenPlayerCovers
 import com.miori.music.ui.player.PlayerDock
 import com.miori.music.ui.screens.DetailScreen
 import com.miori.music.ui.screens.sortedForDetail
 import com.miori.music.ui.screens.ExploreScreen
+import com.miori.music.ui.screens.mixKeyColors
 import com.miori.music.ui.screens.LocalFolder
 import com.miori.music.ui.screens.LocalFolderState
 import com.miori.music.ui.screens.LocalFolderTab
@@ -352,8 +378,6 @@ import com.miori.music.ui.screens.MoodGenrePlaylistsScreen
 import com.miori.music.ui.screens.SearchScreen
 import com.miori.music.data.settings.SongSort
 import com.miori.music.ui.onboarding.OnboardingScreen
-import com.miori.music.ui.festive.DiwaliGate
-import com.miori.music.ui.festive.DiwaliGreetingScreen
 import com.miori.music.ui.replay.ReplayScreen
 import com.miori.music.ui.replay.cards
 import com.miori.music.ui.replay.ReplayShareSheet
@@ -365,7 +389,6 @@ import com.miori.music.ui.theme.rememberArtworkPalette
 import com.miori.music.data.canvas.AppleArtistArtRepository
 import com.miori.music.data.canvas.keyColors
 import com.miori.music.ui.theme.SystemBarIcons
-import com.miori.music.ui.utils.guardSheetFromContentTouches
 import com.miori.music.ui.utils.rememberIosOverscrollFactory
 import com.miori.music.ui.performance.resolvePerformanceRefreshRate
 import dev.chrisbanes.haze.HazeState
@@ -405,6 +428,7 @@ class MainActivity : AppCompatActivity() {
         setContent {
             val theme by AppSettings.themeMode.collectAsStateWithLifecycle()
             val appFont by AppSettings.appFont.collectAsStateWithLifecycle()
+            val accentColor by AppSettings.accentColor.collectAsStateWithLifecycle()
             val highPerformance by AppSettings.highPerformanceMode.collectAsStateWithLifecycle()
             val liquidGlassEnabled by AppSettings.liquidGlass.collectAsStateWithLifecycle()
             val iosOverscrollFactory = rememberIosOverscrollFactory()
@@ -418,7 +442,8 @@ class MainActivity : AppCompatActivity() {
                 ThemeMode.LIGHT -> false
                 ThemeMode.DARK -> true
             }
-            MioriTheme(darkTheme = darkTheme, font = appFont) {
+            LaunchedEffect(darkTheme) { AppSettings.syncGlassPresetTheme(darkTheme) }
+            MioriTheme(darkTheme = darkTheme, font = appFont, accent = accentColor) {
                 // The glass surfaces sample this layer, and a layer records only
                 // what is drawn into it — which, for Miori, is a page that
                 // paints no background of its own. Everywhere a page is not
@@ -436,10 +461,17 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 val appBackdrop = rememberLayerBackdrop(onDraw = paintBackdrop)
+                // Rekaman daftar lirik, yang dibiaskan tombol kaca di atas player.
+                val lyricsBackdrop = rememberLayerBackdrop()
                 CompositionLocalProvider(
                     LocalOverscrollFactory provides iosOverscrollFactory,
                     LocalLiquidGlassEnabled provides liquidGlassEnabled,
-                    LocalAppBackdrop provides appBackdrop,
+                    LocalSegmentedControlStyle provides AppSegmentedControlStyle,
+                    LocalShareIcon provides SfIcons.Share,
+                    LocalCloseIcon provides SfIcons.Close,
+                    LocalMostPlayedArt provides { covers, motion, modifier ->
+                        MostPlayedArt(covers, motion, modifier)
+                    },
                     LocalMixCoverBackground provides { colors, motion, modifier ->
                         OrganicFluidBackground(
                             modifier = modifier,
@@ -447,7 +479,124 @@ class MainActivity : AppCompatActivity() {
                             animationSpeed = if (motion) 2.2f else 0f,
                         )
                     },
+                    LocalAppBackdrop provides appBackdrop,
+                    LocalLyricsGlassDisc provides { active -> lyricsGlassDiscSurface(active, lyricsBackdrop) },
+                    LocalLyricsGlassSource provides { content -> lyricsGlassSource(content, lyricsBackdrop) },
+                    LocalLyricsMenuPopover provides { open, anchor, onDismiss, entries, haze ->
+                        // Still seluruh player (mesh + lirik), sama seperti menu ⋯, supaya
+                        // panel benar-benar blur. Haze player tidak memuat teks lirik dan
+                        // menggambar background opak, jadi panelnya tampak solid.
+                        val playerFrost = LocalPlayerMenuBackdrop.current
+                        val reduceBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+                        var captured by remember { mutableStateOf(false) }
+                        LaunchedEffect(open, reduceBlur, playerFrost) {
+                            val still = playerFrost as? SnapshotBackdrop ?: return@LaunchedEffect
+                            if (open && !reduceBlur) {
+                                // Always a fresh still, so a stale one without the
+                                // lyrics on screen now never stands in for it.
+                                still.capture()
+                                captured = true
+                            } else if (captured) {
+                                delay(SNAPSHOT_RELEASE_DELAY_MS)
+                                still.release()
+                                captured = false
+                            }
+                        }
+                        IosMenuPopover(
+                            item = if (open) Unit else null,
+                            anchor = anchor,
+                            onDismiss = onDismiss,
+                            // Saat Canvas live, playerFrost adalah LayerBackdrop yang merekam
+                            // seluruh player, termasuk popover ini sendiri (dipasang di dalam
+                            // lirik). Menggambar backdrop yang memuat dirinya = rekursi -> crash.
+                            backdrop = (playerFrost as? SnapshotBackdrop) ?: lyricsBackdrop,
+                            hazeState = haze,
+                            placement = IosMenuPlacement.AboveStart,
+                            dimBackground = false,
+                            glassRim = true,
+                            frostAlpha = 0.3f,
+                            startOffset = (-32).dp,
+                        ) {
+                            entries.forEach { entry ->
+                                IosMenuRow(
+                                    label = entry.label,
+                                    icon = entry.icon,
+                                    onClick = entry.onClick,
+                                    enabled = entry.enabled,
+                                    labelColor = if (entry.selected) MaterialTheme.colorScheme.primary else null,
+                                    trailing = if (entry.selected) ({
+                                        Icon(
+                                            imageVector = Icons.Rounded.Check,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    }) else null,
+                                )
+                            }
+                        }
+                    },
+                    LocalQueueInfoPopover provides { open, anchor, atStart, onDismiss, title, body, haze ->
+                        // Sama seperti popover globe: still player supaya frost benar-benar blur.
+                        val playerFrost = LocalPlayerMenuBackdrop.current
+                        val reduceBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+                        var captured by remember { mutableStateOf(false) }
+                        LaunchedEffect(open, reduceBlur, playerFrost) {
+                            val still = playerFrost as? SnapshotBackdrop ?: return@LaunchedEffect
+                            if (open && !reduceBlur) {
+                                still.capture()
+                                captured = true
+                            } else if (captured) {
+                                delay(SNAPSHOT_RELEASE_DELAY_MS)
+                                still.release()
+                                captured = false
+                            }
+                        }
+                        IosMenuPopover(
+                            item = if (open) Unit else null,
+                            anchor = anchor,
+                            onDismiss = onDismiss,
+                            // Sama seperti popover globe: hindari backdrop live yang memuat dirinya.
+                            backdrop = (playerFrost as? SnapshotBackdrop) ?: lyricsBackdrop,
+                            hazeState = haze,
+                            placement = if (atStart) IosMenuPlacement.BelowStart else IosMenuPlacement.BelowEnd,
+                            dimBackground = false,
+                            glassRim = true,
+                            frostAlpha = 0.3f,
+                        ) {
+                            Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                                Text(
+                                    text = title,
+                                    color = androidx.compose.ui.graphics.Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = body,
+                                    color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.72f),
+                                    fontSize = 14.sp,
+                                    lineHeight = 18.sp,
+                                )
+                            }
+                        }
+                    },
+                    LocalMotionLyricLine provides { line, position, style, inactive, active, modifier ->
+                        val motionWords = remember(line) { line.toMotionWords() }
+                        val sparkle by AppSettings.lyricsSparkle.collectAsStateWithLifecycle()
+                        MotionLyricLine(
+                            text = line.text,
+                            words = motionWords,
+                            positionProvider = position,
+                            style = style,
+                            inactiveColor = inactive,
+                            activeColor = active,
+                            modifier = modifier,
+                            sparkle = sparkle,
+                        )
+                    },
                 ) {
+                com.miori.music.ui.components.PopupTapOriginTracker()
                 // The window's width, measured rather than asked for.
                 //
                 // `Configuration.screenWidthDp` is the wrong question here: in a
@@ -552,14 +701,25 @@ private fun MioriApp(
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val progressiveBlur by AppSettings.progressiveBlur.collectAsStateWithLifecycle()
     val glassSamplesBackdrop = glassActive && !reduceDynamicBlur
+    // Local backdrop for the Search tab: records the mood grid so the fixed
+    // header above it can draw a blurred copy of what scrolls underneath.
+    val searchBackdrop = rememberLayerBackdrop()
     // What folds [GlassNavBar] between its expanded and inline shapes. Held here
     // rather than inside the bar because the page's scroll is what drives it,
     // and the page is a sibling of the bar rather than a child.
-    val navBarScroll = rememberFloatingTabBarScrollConnection()
+    val navBarScroll = rememberFloatingTabBarScrollConnection(expandThreshold = 250.dp)
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    // Bar index of the last tab that was not Search; the search morph folds to it.
+    var lastBarTab by remember { mutableIntStateOf(0) }
     // Explore loads the first time it's shown, not at launch beside Home.
     LaunchedEffect(selectedTab) {
-        if (selectedTab == TAB_EXPLORE) viewModel.onExploreShown()
+        // The Search tab's categories come from the same feed Explore loads.
+        if (selectedTab == TAB_EXPLORE || selectedTab == TAB_SEARCH) viewModel.onExploreShown()
+    }
+    // Charts New dibaca di latar sesaat setelah Home, jadi tab terbuka sudah berisi.
+    LaunchedEffect(Unit) {
+        delay(3_000)
+        viewModel.prefetchExploreCharts()
     }
     /**
      * Whether the player's sheet is up. The player is always a full-screen
@@ -597,13 +757,6 @@ private fun MioriApp(
         )
     }
     playerSheetMotion.windowInfo = LocalWindowInfo.current
-    // Whether a portrait player fully up has the page covered. Derived, so the
-    // page's draw below hears when that flips rather than on every frame of the
-    // sheet's travel: read straight off the fraction, each of those frames
-    // redrew the page's whole window behind the player, glass and blurs and all.
-    val coveredByPlayer by remember {
-        derivedStateOf { showNowPlaying && playerDock.attached && playerDock.openFraction() >= 1f }
-    }
     // "Reduce animation" keeps the player as it always was: M3's own slide up
     // and down, its own scrim and window animations, no pull from the mini
     // player and no artwork flying between the two. Everything below that
@@ -611,6 +764,16 @@ private fun MioriApp(
     // dock or the motion directly.
     val reducePlayerMotion by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
     val activeDock = playerDock.takeIf { !reducePlayerMotion }
+    // Selagi player ditarik/dibuka di atas halaman, animasi hero Most Played
+    // dibekukan. Dibaca lewat snapshotFlow, jadi tidak ada recomposition di sini.
+    LaunchedEffect(activeDock) {
+        try {
+            androidx.compose.runtime.snapshotFlow { (activeDock?.openFraction() ?: 0f) > 0f }
+                .collect { com.miori.music.ui.screens.HeroMotion.frozen = it }
+        } finally {
+            com.miori.music.ui.screens.HeroMotion.frozen = false
+        }
+    }
     playerSheetMotion.flingVelocity = with(LocalDensity.current) { PLAYER_PULL_FLING_VELOCITY.toPx() }
     // How the app takes the player down, whatever for: a back press, or a page
     // opened from inside it. Set straight to false, the sheet left in one frame
@@ -654,9 +817,6 @@ private fun MioriApp(
     // background at all. Hosting it here also puts the scrim over the tab bar
     // and the mini player, like every other alert in the app.
     var editingSource by remember { mutableStateOf<SourceConfig?>(null) }
-    var choosingSourceQuality by remember { mutableStateOf<SourceConfig?>(null) }
-    /** An addon whose "Outdated addon" line was tapped; see [SourceConfig.needsAddonUpdate]. */
-    var explainingOutdatedAddon by remember { mutableStateOf<SourceConfig?>(null) }
     var confirmJioSaavn by remember { mutableStateOf(false) }
     var confirmBitPerfect by remember { mutableStateOf<BitPerfectMode?>(null) }
     var confirmFixedVolume by remember { mutableStateOf(false) }
@@ -670,9 +830,13 @@ private fun MioriApp(
     var editingSignatureApi by remember { mutableStateOf(false) }
     var librarySortMenuOpen by remember { mutableStateOf(false) }
     var showLyricsSources by remember { mutableStateOf(false) }
+    var showCanvasProviders by remember { mutableStateOf(false) }
     var showAppLanguage by remember { mutableStateOf(false) }
+    var showHomeLayout by remember { mutableStateOf(false) }
     var showTranslationLanguage by remember { mutableStateOf(false) }
     var showAccountSelector by remember { mutableStateOf(false) }
+    // The popup has started leaving: the header's profile button returns with it.
+    var accountSelectorLeaving by remember { mutableStateOf(false) }
     var showListenBrainzLogin by remember { mutableStateOf(false) }
     var showLastfmLogin by remember { mutableStateOf(false) }
     var showWebDavEditor by remember { mutableStateOf(false) }
@@ -686,6 +850,11 @@ private fun MioriApp(
     var showSpotifyLogin by remember { mutableStateOf(false) }
     var discordDialog by remember { mutableStateOf<DiscordDialog?>(null) }
     var songActions by remember { mutableStateOf<Song?>(null) }
+    // Song Info hidup di luar menu supaya menu bisa menutup di belakangnya.
+    var songInfoTarget by remember { mutableStateOf<Song?>(null) }
+    var songInfoBackdrop by remember {
+        mutableStateOf<com.miori.music.ui.components.backdrop.Backdrop?>(null)
+    }
     var showLyricsOffset by remember { mutableStateOf(false) }
     /**
      * Whether the track menu that is up was opened from the player.
@@ -748,6 +917,8 @@ private fun MioriApp(
     // The picker opened from the Library tab, where there is no track and
     // creating the playlist is the whole errand.
     var creatingPlaylist by remember { mutableStateOf(false) }
+    // Playlist yang baru dibuat dan sedang diisi lewat popup "tambah lagu".
+    var addSongsPlaylist by remember { mutableStateOf<UserPlaylist?>(null) }
     // The same two, over the device's own playlists — for a track that is a
     // file on it, and for "New playlist" on Local Music's Playlists tab.
     var offlinePlaylistTarget by remember { mutableStateOf<Song?>(null) }
@@ -791,6 +962,40 @@ private fun MioriApp(
     // signal to focus the input field.
     var searchFocusRequested by remember { mutableStateOf(false) }
     val searchFieldFocus = remember { FocusRequester() }
+    // Whether the top bar's search field has focus. The Search tab shows its
+    // categories while it has none and the recent searches once it does.
+    var searchFieldFocused by remember { mutableStateOf(false) }
+    // Separate Search on liquid glass: the field only opens after the Search
+    // circle is tapped while already on the categories.
+    var searchFieldOpen by remember { mutableStateOf(false) }
+    // The target the search bar animates to; searchFieldOpen stays true until
+    // the close animation has finished, so the bar is not swapped out mid-fold.
+    var searchFieldExpanded by remember { mutableStateOf(false) }
+    // Menu sumber (YouTube / Library / Addons) yang diminta globe di bar pencarian.
+    // Digambar di root, di luar Column bar, supaya tidak memakan layout bar.
+    var searchSourceMenu by remember { mutableStateOf<SourceMenuRequest?>(null) }
+    // Whether the field opened out of the collapsed (inline) nav bar, and how far
+    // the bar has opened: the mini player rises and widens on that same spring.
+    var searchFromInline by remember { mutableStateOf(false) }
+    // Height of the bar stack that floats over the Search page (mini player, notice,
+    // the search bar); with the keyboard it is the room the suggestions must leave.
+    var searchStackHeightPx by remember { mutableIntStateOf(0) }
+    val searchListImeInsets = WindowInsets.ime
+    val searchListDensity = LocalDensity.current
+    val searchListInset: () -> Int = remember(searchListImeInsets, searchListDensity) {
+        { searchStackHeightPx + searchListImeInsets.getBottom(searchListDensity) }
+    }
+    // Height of the bars under the plain bottom search field (no morph), reported
+    // by the floating bars. The field sits above the taller of these and the
+    // keyboard, so the suggestions leave that room plus the field's own height.
+    var searchBottomBarsPx by remember { mutableIntStateOf(0) }
+    val searchBottomFieldInset: () -> Int = remember(searchListImeInsets, searchListDensity) {
+        {
+            maxOf(searchBottomBarsPx, searchListImeInsets.getBottom(searchListDensity)) +
+                with(searchListDensity) { (10.dp + 48.dp).roundToPx() }
+        }
+    }
+    var searchOpenState by remember { mutableStateOf<androidx.compose.runtime.State<Float>?>(null) }
     // Invalidates an in-flight radio lookup when a later play request wins.
     var playRequestGeneration by remember { mutableIntStateOf(0) }
     // Starting radio from the item already playing must not replace that media
@@ -808,23 +1013,6 @@ private fun MioriApp(
     onboardingShown.targetState = !onboardingComplete
     val onboardingVisible = onboardingShown.currentState || onboardingShown.targetState
 
-    // ---- Diwali (greeting once after the welcome, golden home wordmark) ----
-    // Indian users only, by the device timezone alone, and only on Diwali
-    // itself (see DiwaliGate). Asked again each time the app comes to the
-    // front, so one left open overnight into the day still greets — and one
-    // left open past it lets the gold go.
-    val diwaliFestive = remember(appForeground) {
-        DiwaliGate.isIndianTimezone() && DiwaliGate.isDiwaliDay()
-    }
-    var showDiwali by rememberSaveable { mutableStateOf(false) }
-    var diwaliAutoShown by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(diwaliFestive, onboardingComplete) {
-        if (diwaliFestive && onboardingComplete && !diwaliAutoShown) {
-            diwaliAutoShown = true
-            if (!AppSettings.diwaliGreetingShown.value) showDiwali = true
-        }
-    }
-
     // ---- Navigation ----
     // One back stack for every page: the routes pushed over the tabs, and the
     // album / artist / playlist pages interleaved with them — see
@@ -840,11 +1028,22 @@ private fun MioriApp(
     val detailActiveShelf = artistShelfRoute?.shelf
     /** The route on screen, or null when a release page or a tab is. */
     val route = visibleEntry?.route
+    // Halaman pengaturan Kaca Cair dipakai untuk melihat hasil efek, jadi navbar
+    // dikunci di bentuk expanded: mini player tetap di atas pil tab dan tidak
+    // pernah melipat ke tengah bar saat halaman digulir.
+    val glassPreviewPage =
+        (route as? AppRoute.SettingsChoice)?.choice == SettingsChoiceKind.LIQUID_GLASS
+    LaunchedEffect(glassPreviewPage) {
+        if (glassPreviewPage) navBarScroll.expand()
+    }
     /**
      * The release page at the top of its stack, whether or not a route
      * covers it. Most things want [detail] — the one actually on screen.
      */
     val topDetail = detailStack.lastOrNull()
+    androidx.compose.runtime.SideEffect {
+        coverFlightPagesOpen(detailStack.map { it.browseId })
+    }
     /** The release page on screen, or null when a route or a tab is. */
     val detail = topDetail?.takeIf { visibleEntry == null }
     // The reorder list lives on its playlist's page; leaving that page by any
@@ -854,20 +1053,24 @@ private fun MioriApp(
     }
 
     SystemBarIcons(
-        dark = !darkTheme && !showNowPlaying && route != AppRoute.Replay && replayStory == null && !onboardingVisible && !showDiwali,
+        dark = !darkTheme && !showNowPlaying && route != AppRoute.Replay && replayStory == null && !onboardingVisible,
     )
 
     val homeState by viewModel.home.collectAsStateWithLifecycle()
-    val hideRecents by AppSettings.hideRecents.collectAsStateWithLifecycle()
+    val hideHomeRecents by AppSettings.hideHomeRecents.collectAsStateWithLifecycle()
+    val hideHomeBranding by AppSettings.hideHomeBranding.collectAsStateWithLifecycle()
     val hideHomeVideos by AppSettings.hideHomeVideos.collectAsStateWithLifecycle()
-    val hideTopPicks by AppSettings.hideTopPicks.collectAsStateWithLifecycle()
+    val hideHomeTopPicks by AppSettings.hideHomeTopPicks.collectAsStateWithLifecycle()
     val hideHomeMoods by AppSettings.hideHomeMoods.collectAsStateWithLifecycle()
-    // Only what Home draws: Top Picks reads the unfiltered feed from the view model.
-    val visibleHomeState = remember(homeState, hideHomeVideos, hideRecents) {
+    val homeLayout by AppSettings.homeLayout.collectAsStateWithLifecycle()
+    val libraryArtistsRow by AppSettings.libraryArtistsRow.collectAsStateWithLifecycle()
+    val libraryLayout by AppSettings.libraryLayout.collectAsStateWithLifecycle()
+    // Only what Home draws: Top Picks and Explore keep reading the full feed.
+    val visibleHomeState = remember(homeState, hideHomeVideos, hideHomeRecents) {
         val loaded = homeState as? UiState.Success
-        if (loaded != null && (hideHomeVideos || hideRecents)) {
+        if (loaded != null && (hideHomeVideos || hideHomeRecents)) {
             var shelves = loaded.data
-            if (hideRecents) shelves = shelves.filterNot { it.title == YtMusicRepository.RECENT_TITLE }
+            if (hideHomeRecents) shelves = shelves.filterNot { it.title == YtMusicRepository.RECENT_TITLE }
             if (hideHomeVideos) shelves = shelves.withoutVideos()
             UiState.Success(shelves)
         } else {
@@ -894,6 +1097,10 @@ private fun MioriApp(
      */
     val updateNotice = updateAvailable
 
+    // Overdue update (release older than two days): the popup is no longer
+    // once-per-launch or dismissible — it stays up until the update is installed.
+    val updateForced = updateNotice?.isMandatory() == true
+
     LaunchedEffect(updateNotice) {
         if (updateNotice != null && !updateDialogShown) {
             updateDialogShown = true
@@ -903,6 +1110,7 @@ private fun MioriApp(
     val query by viewModel.query.collectAsStateWithLifecycle()
     val results by viewModel.results.collectAsStateWithLifecycle()
     val exploreState by viewModel.explore.collectAsStateWithLifecycle()
+    val exploreCharts by viewModel.exploreCharts.collectAsStateWithLifecycle()
     val selectedMoodGenre by viewModel.selectedMoodGenre.collectAsStateWithLifecycle()
     val moodGenreShelves by viewModel.moodGenreShelves.collectAsStateWithLifecycle()
     val libraryState by viewModel.library.collectAsStateWithLifecycle()
@@ -952,6 +1160,7 @@ private fun MioriApp(
     val lyricsSource by viewModel.lyricsSource.collectAsStateWithLifecycle()
     val lyricsChecked by viewModel.lyricsChecked.collectAsStateWithLifecycle()
     val lyricsProviderStates by viewModel.lyricsProviderStates.collectAsStateWithLifecycle()
+    val manualLyricsState by viewModel.manualLyricsState.collectAsStateWithLifecycle()
     val searchHistory by viewModel.searchHistory.collectAsStateWithLifecycle()
     val searchSuggestions by viewModel.suggestions.collectAsStateWithLifecycle()
     val searchLoadingMore by viewModel.searchLoadingMore.collectAsStateWithLifecycle()
@@ -977,6 +1186,9 @@ private fun MioriApp(
     val detailSongSorts by AppSettings.detailSongSorts.collectAsStateWithLifecycle()
     val songSort = topDetail?.browseId?.let { detailSongSorts[it] } ?: SongSort.DEFAULT
     var songSortMenuOpen by remember { mutableStateOf(false) }
+    // Search / sort / overflow on an album or playlist page stay folded into one
+    // button until it is tapped, so the top bar is a single glass circle at rest.
+    var detailActionsExpanded by rememberSaveable(topDetail?.browseId) { mutableStateOf(false) }
     // A device folder's equivalents — its sort and whether it is a grid —
     // kept apart for Downloads and shared by every other folder, as they
     // always were. Up here because both the page and the top bar's menu read
@@ -1018,6 +1230,8 @@ private fun MioriApp(
     val pinnedToOriginal by OriginalVersion.pinned.collectAsStateWithLifecycle()
     val qualityUpgradesInFlight by NerdStats.racingLossless.collectAsStateWithLifecycle()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
+    // Playlist mana yang terkonfirmasi dibuat akun ini; menentukan tombol Add songs.
+    val ownedPlaylistPages by viewModel.playlistOwned.collectAsStateWithLifecycle()
     val playlistsLoading by viewModel.playlistsLoading.collectAsStateWithLifecycle()
 
     // The Downloads page is a snapshot of the folder, taken when it was opened.
@@ -1044,12 +1258,27 @@ private fun MioriApp(
     }
     // Playlists imported without (or instead of) a YouTube Music account live
     // in the app's own store, and sit on the same shelf as the downloaded ones.
+    // A pinned Spotify playlist sits in no Library shelf, so its card is
+    // rebuilt from what was saved when it was pinned.
+    val pinnedCards by AppSettings.pinnedCards.collectAsStateWithLifecycle()
+    val spotifyPinnedItems = remember(pinnedCards) {
+        pinnedCards.map { (id, card) ->
+            ShelfItem(
+                title = card.title,
+                subtitle = card.subtitle,
+                thumbnailUrl = card.thumbnailUrl,
+                videoId = null,
+                browseId = id,
+            )
+        }
+    }
     val localPlaylists by com.miori.music.data.spotify.LocalPlaylistStore.playlists.collectAsStateWithLifecycle()
     val localPlaylistItems = localPlaylists.map { playlist ->
         ShelfItem(
             title = playlist.title,
             subtitle = stringResource(R.string.local_playlist_subtitle, playlist.songs.size),
-            thumbnailUrl = playlist.songs.firstOrNull { !it.thumbnailUrl.isNullOrBlank() }?.thumbnailUrl,
+            thumbnailUrl = playlist.coverUrl
+                ?: playlist.songs.firstOrNull { !it.thumbnailUrl.isNullOrBlank() }?.thumbnailUrl,
             videoId = null,
             browseId = playlist.browseId,
         )
@@ -1062,7 +1291,7 @@ private fun MioriApp(
     val downloadIdFor: (String?) -> String? = { id ->
         id?.let { Downloads.recordIdOf(it) ?: it }?.takeIf { it in savedCollections }
     }
-    LaunchedEffect(savedDownloads, savedCollections, topDetail?.browseId) {
+    LaunchedEffect(savedDownloads, savedCollections, topDetail?.browseId, localPlaylists) {
         val openPage = topDetail ?: return@LaunchedEffect
         val open = openPage.browseId
         // A downloaded playlist's page is a snapshot of the same folder and goes
@@ -1075,6 +1304,14 @@ private fun MioriApp(
             (folder == "local:downloads" || folder == CACHE_FOLDER_BROWSE_ID || Downloads.recordIdOf(open) != null ||
                 com.miori.music.data.spotify.LocalPlaylistStore.getPlaylist(open) != null)
         ) {
+            viewModel.reloadLocalDetail(open)
+        }
+    }
+    // Tracks copied into the downloads folder from a file manager while the app
+    // was in the background show up as soon as the page is back in front.
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        val open = topDetail?.browseId ?: return@LifecycleEventEffect
+        if (open == "local:downloads" || LocalGroups.folderOf(open) == "local:downloads") {
             viewModel.reloadLocalDetail(open)
         }
     }
@@ -1105,6 +1342,13 @@ private fun MioriApp(
     }
     val controller = rememberMediaController()
     val player = rememberPlayerState(controller)
+    // Warna solid latar panel player selagi tumbuh dari mini player. Dibaca dari
+    // cover lagu yang sedang diputar sejak lagu berganti, bukan saat player
+    // dibuka, supaya frame pertama sudah warna cover (bukan warna tema/lagu lama).
+    val panelArtUrl = com.miori.music.ui.components.rememberRemoteArtworkUrl(player.song)
+    val panelArtColor = com.miori.music.ui.theme.rememberArtworkPanelColor(panelArtUrl)
+        ?: androidx.compose.ui.graphics.Color(0xFF151517)
+    androidx.compose.runtime.SideEffect { playerDock.panelColor = panelArtColor }
     // A music video's picture follows this controller's clock — see [MusicVideoEngine].
     DisposableEffect(controller) {
         MusicVideoEngine.attach(controller)
@@ -1176,6 +1420,7 @@ private fun MioriApp(
         }
     }
     val shuffleEnabled by QueueShuffle.enabled.collectAsStateWithLifecycle()
+    com.miori.music.ui.components.StarPromptHost(isPlaying = player.isPlaying)
     // For the version switch's "there is no other version" notice.
     val versionContext = LocalContext.current
     // Tracks whose other cut a switch looked for and didn't find: their menu
@@ -1237,13 +1482,14 @@ private fun MioriApp(
     val searchListState = rememberLazyListState()
     val currentListState = when (selectedTab) {
         TAB_HOME -> homeListState
-        TAB_EXPLORE -> if (selectedMoodGenre == null) exploreListState else moodGenreListState
+        TAB_EXPLORE -> exploreListState
         TAB_LIBRARY -> libraryListState
-        else -> searchListState
+        else -> if (selectedMoodGenre == null) searchListState else moodGenreListState
     }
 
-    // Pull-to-refresh: the drag lives with the feed, revealing an elastic
-    // spoke indicator in the gap opened at the top.
+
+    // Pull-to-refresh: the whole feed follows the finger, so the state lives
+    // here to survive tab switches while a pull or a refresh is in flight.
     val homePull = rememberElasticRefreshState()
     val explorePull = rememberElasticRefreshState()
     val libraryPull = rememberElasticRefreshState()
@@ -1263,13 +1509,13 @@ private fun MioriApp(
         // was last fetched is a change to exactly this page.
         if (currentFeed == MainViewModel.Feed.LIBRARY) viewModel.onLibraryShown()
     }
+    // Pindah tab di tengah penerbangan cover: kartu tujuannya sudah bergeser
+    // atau hilang, jadi penerbangan dihentikan, bukan dibiarkan mengikuti.
+    LaunchedEffect(selectedTab) { cancelCoverFlight() }
 
-    val currentPull = when (currentFeed) {
-        MainViewModel.Feed.HOME -> homePull
-        MainViewModel.Feed.EXPLORE -> explorePull
-        MainViewModel.Feed.LIBRARY -> libraryPull
-        null -> null
-    }
+    // State pull yang tertinggal saat feed keluar layar (pindah tab, halaman
+    // mood dibuka di atas Explore) dirapikan oleh PullToRefresh sendiri begitu
+    // feed tampil lagi, jadi tidak perlu dibersihkan dari sini.
     val scrolled by remember(currentListState) {
         derivedStateOf {
             currentListState.firstVisibleItemIndex > 0 ||
@@ -1329,6 +1575,29 @@ private fun MioriApp(
         pageKeysSeen.removeAll(gone.toSet())
     }
     val detailTitleDrop = with(LocalDensity.current) { DETAIL_TITLE_DROP.toPx() }
+
+    // Jarak scroll halaman yang sedang tampil. Dibaca hanya di dalam lambda
+    // (graphicsLayer bar) supaya tidak merekomposisi layar tiap frame scroll.
+    val pageScroll = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    val pageScrollByKey = remember { mutableMapOf<String, Float>() }
+    val pageScrollHolder = remember { object { var key: String = "" } }
+    val pageTitleFadePx = with(LocalDensity.current) { 64.dp.toPx() }
+    val pageScrollConnection = remember {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: androidx.compose.ui.geometry.Offset,
+                available: androidx.compose.ui.geometry.Offset,
+                source: androidx.compose.ui.input.nestedscroll.NestedScrollSource,
+            ): androidx.compose.ui.geometry.Offset {
+                if (consumed.y != 0f) {
+                    val next = (pageScroll.floatValue - consumed.y).coerceAtLeast(0f)
+                    pageScroll.floatValue = next
+                    pageScrollByKey[pageScrollHolder.key] = next
+                }
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+        }
+    }
     val detailScrolled by remember(detailListState, detailTitleDrop) {
         derivedStateOf {
             detailListState.firstVisibleItemIndex > 0 ||
@@ -1344,7 +1613,6 @@ private fun MioriApp(
     // and every glass surface on them recompose once per frame for the length of
     // a fold. Keyed on the labels so a locale change still rebuilds it.
     val homeLabel = stringResource(R.string.home)
-    val playLabel = stringResource(R.string.play)
     val exploreLabel = stringResource(R.string.explore)
     val libraryLabel = stringResource(R.string.library)
     val searchLabel = stringResource(R.string.search)
@@ -1360,6 +1628,23 @@ private fun MioriApp(
             BottomTab(libraryLabel, MioriIcons.TabLibrary),
             BottomTab(searchLabel, MioriIcons.TabSearch),
         )
+    }
+    // The bars draw this list; [tabs] stays the four fixed pages (titles and
+    // TAB_* indexes read it). Listen Together is not a page of its own — its
+    // tab opens AppRoute.ListenTogether over the current tab — and is slotted
+    // in right after Explore. Search still has to stay last: GlassNavBar
+    // draws the final tab as its standalone circle.
+    val listenTogetherTab by AppSettings.showListenTogetherTab.collectAsStateWithLifecycle()
+    val searchTabSeparate by AppSettings.searchTabSeparate.collectAsStateWithLifecycle()
+    val listenTogetherTabLabel = stringResource(R.string.listen_together_tab)
+    val barTabs = remember(tabs, listenTogetherTab, listenTogetherTabLabel) {
+        if (!listenTogetherTab) {
+            tabs
+        } else {
+            tabs.toMutableList().apply {
+                add(TAB_LIBRARY, BottomTab(listenTogetherTabLabel, Icons.Rounded.Groups))
+            }
+        }
     }
 
     val scope = rememberCoroutineScope()
@@ -1421,9 +1706,11 @@ private fun MioriApp(
             // to release the loading state and resume it immediately.
             if (audio == null || audio.videoId == song.videoId) {
                 TrackLog.w("Player", "audio switch found no distinct official song", song.videoId)
-                // The switch is always offered now, so say when there was nothing to switch to.
-                if (song.videoId !in missingVersions) missingVersions += song.videoId
-                if (stillCurrent) showQueueNotice(versionContext.getString(R.string.no_audio_version))
+                // Hanya dianggap "tidak ada versi audio" bila pencarian benar-benar selesai tanpa hasil;
+                // gagal jaringan tidak boleh mengunci tombol sebagai tidak tersedia.
+                val confirmedMissing = audio != null && YtMusicRepository.hasNoAudioVersion(song.videoId)
+                if (confirmedMissing && song.videoId !in missingVersions) missingVersions += song.videoId
+                if (stillCurrent && confirmedMissing) showQueueNotice(versionContext.getString(R.string.no_audio_version))
                 if (stillCurrent && resumeAfterResolution) c.play()
                 return
             }
@@ -1610,6 +1897,23 @@ private fun MioriApp(
         )
         playFrom(songs, index, source)
     }
+    // A new track always opens the player on its main screen, never on the
+    // lyrics left over from the previous one. Done here, where the player is
+    // always composed, so it holds whichever way the track changed (Search,
+    // album, queue, next/previous) and also while the player is closed to the
+    // mini player. The first track seen is skipped so a restart still restores
+    // the last screen.
+    var lastTrackId by remember { mutableStateOf(player.song?.videoId) }
+    LaunchedEffect(player.song?.videoId) {
+        val id = player.song?.videoId ?: return@LaunchedEffect
+        val previous = lastTrackId
+        lastTrackId = id
+        if (previous != null && previous != id &&
+            AppSettings.lastPlayerScreen.value == LastPlayerScreen.LYRICS
+        ) {
+            AppSettings.setLastPlayerScreen(LastPlayerScreen.MAIN)
+        }
+    }
     LaunchedEffect(player.song?.videoId) {
         if (optimisticVersionSong?.videoId == player.song?.videoId ||
             (optimisticVersionSong != null && player.song?.videoId != convertedAudioId && player.song?.videoId != convertedVideoId && player.song?.videoId != keepVideoId)
@@ -1629,6 +1933,9 @@ private fun MioriApp(
             switchingAudioVersion = false
         }
     }
+
+    // Konversi music video ke audio dilakukan PlaybackService sebelum lagu diputar
+    // (lihat MusicOnlyPlayback); di sini hanya tombol manual di menu pemutar.
 
     /**
      * A song picked on its own — off a home card or a search hit — starts a
@@ -1751,11 +2058,23 @@ private fun MioriApp(
      * does, and AutoPlay carries it on past its last track.
      */
     val openTopPick: (TopPick, String) -> Unit = { pick, label ->
-        val browseId = pick.browseId
-        if (pick.kind == TopPickKind.LATEST_RELEASE && browseId != null) {
+        val pageId = when (pick.kind) {
+            TopPickKind.LATEST_RELEASE -> pick.browseId
+            TopPickKind.FEATURED_ARTIST, TopPickKind.ARTIST_AND_SIMILAR -> pick.artistBrowseId
+            TopPickKind.PERSONAL_STATION, TopPickKind.NEW_RELEASE_MIX, TopPickKind.DISCOVERY_STATION ->
+                pick.watch?.playlistId
+                    ?.takeIf { it.isNotBlank() && !it.startsWith("RDAMVM") }
+                    ?.let { if (it.startsWith("VL")) it else "VL$it" }
+            else -> null
+        }
+        if (pick.kind == TopPickKind.MOST_PLAYED) {
+            viewModel.openMostPlayed(pick, label)
+        } else if (pick.kind == TopPickKind.MADE_FOR_YOU_MIX) {
+            viewModel.openMix(pick, label)
+        } else if (pageId != null) {
             viewModel.openDetail(
-                browseId = browseId,
-                title = pick.title,
+                browseId = pageId,
+                title = pick.title.ifBlank { label },
                 subtitle = pick.artistName.orEmpty(),
                 thumbnailUrl = pick.images.firstOrNull(),
             )
@@ -2091,7 +2410,12 @@ private fun MioriApp(
     val onBrowseLongPress: (ShelfItem) -> Unit = { item ->
         val id = item.browseId
         val type = id?.let { viewModel.browseTypeOf(it) }
-        if (id != null && type != BrowseType.ARTIST) {
+        if (id != null && id.startsWith(SPOTIFY_PAGE_PREFIX)) {
+            // Only a pinned card reaches here. The menu's queue and download
+            // rows fetch through YouTube Music and cannot read a Spotify page,
+            // so holding the card unpins it instead of raising a menu that fails.
+            if (id in AppSettings.pinnedPlaylists.value) AppSettings.togglePinnedPlaylist(id)
+        } else if (id != null && type != BrowseType.ARTIST) {
             openBrowseMenu(
                 BrowseTarget(
                     browseId = id,
@@ -2241,7 +2565,7 @@ private fun MioriApp(
     // The Search tab's Library source reads the Local Music folder, so it asks
     // for the same permission opening that folder does.
     val onSearchSourceChange: (SearchSource) -> Unit = { source ->
-        if (source == SearchSource.LIBRARY && !LocalMediaRepository.hasStoragePermission(context)) {
+        if (source == SearchSource.LIBRARY && !LocalMediaRepository.canReadLocalMusic(context)) {
             mediaPermissionLauncher.launch(mediaPermission)
         }
         viewModel.setSearchSource(source)
@@ -2254,7 +2578,7 @@ private fun MioriApp(
                 navigator.push(AppRoute.Spotify)
                 return@let
             }
-            if ((id == "local:all" || id == "local:downloads") && !LocalMediaRepository.hasStoragePermission(context)) {
+            if ((id == "local:all" || id == "local:downloads") && !LocalMediaRepository.canReadLocalMusic(context)) {
                 mediaPermissionLauncher.launch(mediaPermission)
             }
             // Opened from a shelf's "Show all" page, it stacks over the grid
@@ -2353,7 +2677,12 @@ private fun MioriApp(
             if (!songs.all { Downloads.servableFromCache(it.videoId) }) {
                 SourceRegistry.addonsLeftOutOfDownloads()
                     .firstOrNull { (config, why) -> explainedDownloadExclusions.add("${config.id}:$why") }
-                    ?.let { (config, why) -> addonLeftOutOfDownload = config.displayName to why }
+                    ?.let { (config, why) ->
+                        addonLeftOutOfDownload = config.displayName to why
+                        // Menu ditutup: popup ini window sendiri yang blur-nya
+                        // hanya melihat player/halaman, menu di belakangnya terlewat.
+                        songActions = null
+                    }
             }
         }
         // Recorded for everything that was asked for, not just what still has to
@@ -2447,7 +2776,9 @@ private fun MioriApp(
     // See [topBarContentPadding].
     val listPadding = PaddingValues(
         top = topBarContentPadding(),
-        bottom = if (player.song != null) 210.dp else 140.dp,
+        // Tab Search menambah ruang untuk field yang melayang di atas nav bar.
+        bottom = (if (player.song != null) 210.dp else 140.dp) +
+            (if (selectedTab == TAB_SEARCH) 64.dp else 0.dp),
     )
 
     // What colour the page currently under the bars is. The fades either end
@@ -2465,8 +2796,13 @@ private fun MioriApp(
             ?.let { AppleArtistArtRepository.cached(it.browseId) }
     }
     val detailPalette = rememberArtworkPalette(
-        imageUrl = detailApple?.heroUrl ?: topDetail?.thumbnailUrl,
-        keyColors = detailApple?.keyColors(),
+        imageUrl = detailApple?.heroUrl ?: topDetail?.thumbnailUrl
+            ?: topDetail?.takeIf {
+                it.browseId == "local:downloads" || it.browseId == "local:all" || it.browseId == "local:cache"
+            }?.let { folderPage ->
+                (folderPage.songs as? UiState.Success)?.data?.firstOrNull { it.thumbnailUrl != null }?.thumbnailUrl
+            },
+        keyColors = detailApple?.keyColors() ?: topDetail?.mix?.let { mixKeyColors(it) },
     )
 
     // One set of numbers for the cards, the page, the stories and the shared
@@ -2555,6 +2891,7 @@ private fun MioriApp(
             // the parameter.
             menuOpen = { songActions != null && menuFromPlayer && songMenuOrigin == null },
             onLiveCanvasChanged = { playerLiveCanvas = it },
+            onDismissPlayer = dismissPlayer,
             isPlaying = player.isPlaying,
             isLoading = playPauseBusy,
             position = player.position,
@@ -2755,7 +3092,7 @@ private fun MioriApp(
                         replayLandingPage = ReplayStoryPage.INTRO
                         navigator.push(AppRoute.Replay)
                     }
-                    PlaybackSourceType.EXPLORE -> selectedTab = TAB_EXPLORE
+                    PlaybackSourceType.EXPLORE -> selectedTab = TAB_SEARCH
                     PlaybackSourceType.SHARED_LINK -> {
                         val id = sourceId ?: return@openSource
                         context.startActivity(
@@ -2773,6 +3110,8 @@ private fun MioriApp(
             lyricsSource = lyricsSource,
             lyricsProviderStates = lyricsProviderStates,
             onSelectLyricsProvider = viewModel::selectLyricsProvider,
+            manualLyricsState = manualLyricsState,
+            onSearchLyricsManually = viewModel::searchLyricsManually,
             lyricsUnavailable = lyricsChecked && lyrics.isNullOrEmpty(),
             lyricsOffsetOpen = showLyricsOffset,
             onDismissLyricsOffset = { showLyricsOffset = false },
@@ -2805,18 +3144,7 @@ private fun MioriApp(
     Box(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            // Nothing of the page under a portrait player that is fully up:
-            // that player is its own window, opaque from edge to edge, and
-            // this one drawing on behind it — the page, the glass bar and the
-            // blurs that sample it, a now-playing row's bars — is GPU time
-            // taken from the player on every frame for nothing anyone can see.
-            // The same test the player's own dim skips itself on. Composition
-            // and layout carry on, so the page is current the moment the
-            // player starts to come down and this draws again.
-            .drawWithContent {
-                if (!coveredByPlayer) drawContent()
-            },
+            .background(MaterialTheme.colorScheme.background),
     ) {
         // A pushed page replaces the tab content but leaves the tab bar and
         // mini player in place.
@@ -2834,13 +3162,11 @@ private fun MioriApp(
         val replayDrawable = replay.summary?.isEmpty == false
         BackHandler(enabled = replayDrawable && replayStory != null && !showReplayShare) { replayStory = null }
         BackHandler(enabled = replayDrawable && showReplayShare) { showReplayShare = false }
-        BackHandler(enabled = showUpdateDialog) { showUpdateDialog = false }
+        BackHandler(enabled = showUpdateDialog || updateForced) { if (!updateForced) showUpdateDialog = false }
         BackHandler(enabled = showListenBrainzLogin) { showListenBrainzLogin = false }
         BackHandler(enabled = showLastfmLogin) { showLastfmLogin = false }
         BackHandler(enabled = discordDialog != null) { discordDialog = null }
         BackHandler(enabled = editingSource != null) { editingSource = null }
-        BackHandler(enabled = choosingSourceQuality != null) { choosingSourceQuality = null }
-        BackHandler(enabled = explainingOutdatedAddon != null) { explainingOutdatedAddon = null }
         BackHandler(enabled = editingPartyServer) { editingPartyServer = false }
         BackHandler(enabled = editingSignatureApi) { editingSignatureApi = false }
 
@@ -2851,14 +3177,32 @@ private fun MioriApp(
         // one child it always had and changes nothing.
         //
         // Everything a page's menu floats over, and so what [pageBackdrop]
-        // takes its still of; the menus themselves are drawn outside it. On the
-        // window's background, which the pages don't paint: see `paintBackdrop`.
+        // takes its still of; the menus themselves are drawn outside it.
         Row(
             Modifier
                 .fillMaxSize()
-                .snapshotBackdropSource(pageBackdrop, floor = MaterialTheme.colorScheme.background),
+                // Not drawn while a portrait player fully covers it. On the
+                // page's own Row, so the player panel (a sibling) is not skipped.
+                .skipDrawWhenPlayerCovers(activeDock)
+                .snapshotBackdropSource(pageBackdrop),
         ) {
-            Box(Modifier.weight(1f).fillMaxHeight()) {
+            CoverFlightHost(Modifier.weight(1f).fillMaxHeight(), overlay = false) {
+                // The page and the flying cover are one source for the glass: the
+                // bars sample both, so a cover passing under the nav bar or the
+                // mini player is blurred and refracted live, not only once it has
+                // landed and become part of the page.
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .hazeSource(hazeState)
+                        .then(
+                            if (glassActive && glassSamplesBackdrop) {
+                                Modifier.layerBackdrop(appBackdrop)
+                            } else {
+                                Modifier
+                            },
+                        ),
+                ) {
                 AnimatedContent(
                     // Whatever is on top of the back stack — see [AppNavigator].
                     targetState = when {
@@ -2897,28 +3241,24 @@ private fun MioriApp(
                             (this as? AppDestination.Route)?.entry?.route is AppRoute.LibraryShowAll
                         val libraryShowAllSwap = (initial.isShowAll() && target == libraryTab) ||
                             (target.isShowAll() && initial == libraryTab)
+                        val releaseMove = initial is AppDestination.Release || target is AppDestination.Release
                         if (tabSwap || libraryShowAllSwap) {
                             EnterTransition.None togetherWith ExitTransition.None
+                        } else if (releaseMove) {
+                            // A release page brings its own colour: let it come in over
+                            // the cover's flight instead of snapping, while the page it
+                            // replaces clears a little faster so the two don't ghost.
+                            fadeIn(tween(620, easing = androidx.compose.animation.core.LinearOutSlowInEasing)) togetherWith
+                                fadeOut(tween(340))
                         } else {
                             fadeIn(tween(180)) togetherWith fadeOut(tween(180))
                         }
                     },
                     modifier = Modifier
-                        .hazeSource(hazeState)
+                        .nestedScroll(pageScrollConnection)
                         .then(
-                            if (glassActive) {
+                            if (glassActive && !glassPreviewPage) {
                                 Modifier
-                                    // Not under "reduce dynamic blur": nothing
-                                    // samples the layer then, and recording a
-                                    // whole page into one for no reader is the
-                                    // cost that setting exists to remove.
-                                    .then(
-                                        if (glassSamplesBackdrop) {
-                                            Modifier.layerBackdrop(appBackdrop)
-                                        } else {
-                                            Modifier
-                                        },
-                                    )
                                     // Every page's scroll passes through here, so
                                     // the glass bar collapses on all of them
                                     // without each one having to know about it.
@@ -2926,7 +3266,11 @@ private fun MioriApp(
                             } else {
                                 Modifier
                             },
-                        ),
+                        )
+                        // Innermost, so the haze and backdrop sources record the
+                        // page as it is drawn, and the bars (siblings) stay put:
+                        // the mini player's rect is what the panel grows from.
+                        .recedeBehindPlayer(activeDock),
                     label = "content",
                 ) { destination ->
                     // Every branch below reads `destination` rather than the
@@ -2936,6 +3280,10 @@ private fun MioriApp(
                     // redraw itself as its own replacement — which then fades
                     // out from under the identical copy fading in behind it.
                     val key = destination.key
+                    LaunchedEffect(key) {
+                        pageScrollHolder.key = key
+                        pageScroll.floatValue = pageScrollByKey[key] ?: 0f
+                    }
                     val pageRoute = (destination as? AppDestination.Route)?.entry?.route
                     val live = (destination as? AppDestination.Release)?.let { release ->
                         detailStack.lastOrNull()?.takeIf { it.browseId == release.browseId }
@@ -2998,7 +3346,6 @@ private fun MioriApp(
                         } else if (pageRoute == AppRoute.Replay) {
                             ReplayScreen(
                                 state = replay,
-                                holder = account?.name.orEmpty(),
                                 onPeriodChange = setReplayPeriod,
                                 onOpenStory = { replayStory = it },
                                 // A track tapped on a chart is one the user already
@@ -3071,8 +3418,6 @@ private fun MioriApp(
                             SourcesScreen(
                                 contentPadding = listPadding,
                                 onEditSource = { editingSource = it },
-                                onChooseSourceQuality = { choosingSourceQuality = it },
-                                onExplainOutdatedAddon = { explainingOutdatedAddon = it },
                                 onEditWebDav = { showWebDavEditor = true },
                                 onEditSmb = { showSmbEditor = true },
                                 onConfirmJioSaavn = { confirmJioSaavn = true },
@@ -3082,8 +3427,6 @@ private fun MioriApp(
                                 onCleared = { navigator.pop() },
                                 contentPadding = listPadding,
                             )
-                        } else if (pageRoute == AppRoute.WearOs) {
-                            WearOsScreen(contentPadding = listPadding)
                         } else if (pageRoute == AppRoute.ListenTogether) {
                             ListenTogetherScreen(
                                 signedIn = signedIn,
@@ -3115,6 +3458,8 @@ private fun MioriApp(
                                 choice = pageRoute.choice,
                                 onChosen = { navigator.pop() },
                                 onConfirmBitPerfect = { confirmBitPerfect = it },
+                                onSpotifyCanvasAuth = { showSpotifyCanvasAuth = true },
+                                onCanvasProviders = { showCanvasProviders = true },
                                 contentPadding = listPadding,
                             )
                         } else if (pageRoute == AppRoute.Settings || pageRoute is AppRoute.SettingsSection) {
@@ -3142,9 +3487,9 @@ private fun MioriApp(
                                 onTranslationLanguage = { showTranslationLanguage = true },
                                 onSources = { navigator.push(AppRoute.Sources) },
                                 onListenTogether = { navigator.push(AppRoute.ListenTogether) },
-                                onWearOs = { navigator.push(AppRoute.WearOs) },
                                 onSpotifyCanvasAuth = { showSpotifyCanvasAuth = true },
                                 onAppLanguage = { showAppLanguage = true },
+                                onCustomizeHome = { showHomeLayout = true },
                                 onEditSignatureApi = { editingSignatureApi = true },
                                 onConfirmBitPerfect = { confirmBitPerfect = it },
                                 onConfirmFixedVolume = { confirmFixedVolume = true },
@@ -3278,6 +3623,7 @@ private fun MioriApp(
                             }
                             // This page's songs being rearranged, drawn in place of its list.
                             val reordering = reorderTarget?.takeIf { it.browseId == page.browseId }
+                            LaunchedEffect(page.browseId) { viewModel.resolvePlaylistOwnership(page.browseId) }
                             DetailScreen(
                                 page = page,
                                 currentSong = player.song,
@@ -3328,6 +3674,35 @@ private fun MioriApp(
                                     viewModel.openDetail(id, name, "Artist", null, BrowseType.ARTIST)
                                 },
                                 onAddSuggested = { song -> viewModel.addSuggestedSong(page.browseId, song) },
+                                onAddSongs = if (localPlaylists.any { it.browseId == page.browseId }) {
+                                    {
+                                        // Kept on this device: same popup, picks go to the local store.
+                                        addSongsPlaylist = localPlaylists.firstOrNull { it.browseId == page.browseId }
+                                            ?.let { lp ->
+                                                UserPlaylist(
+                                                    playlistId = lp.id,
+                                                    title = page.title,
+                                                    subtitle = "",
+                                                    thumbnailUrl = lp.coverUrl ?: page.thumbnailUrl,
+                                                )
+                                            }
+                                    }
+                                } else if (signedIn &&
+                                    page.type == BrowseType.PLAYLIST &&
+                                    ownedPlaylistPages[page.browseId] == true
+                                ) {
+                                    {
+                                        addSongsPlaylist = playlists.firstOrNull { it.browseId == page.browseId }
+                                            ?: UserPlaylist(
+                                                playlistId = page.browseId.removePrefix("VL"),
+                                                title = page.title,
+                                                subtitle = "",
+                                                thumbnailUrl = page.thumbnailUrl,
+                                            )
+                                    }
+                                } else {
+                                    null
+                                },
                                 // Saving is an account action, so it isn't offered to a
                                 // guest at all — same as the like and add-to-playlist rows
                                 // in the track menu.
@@ -3368,7 +3743,15 @@ private fun MioriApp(
                                             onSave = { reordered ->
                                                 val original = (reorderEntries as? UiState.Success)?.data.orEmpty()
                                                 reorderSaving = true
-                                                viewModel.reorderPlaylist(reordering, original, reordered) { saved ->
+                                                if (reordering.playlistId.startsWith("local:playlist:")) {
+                                                    com.miori.music.data.spotify.LocalPlaylistStore.reorder(
+                                                        reordering.playlistId,
+                                                        reordered.map { it.videoId },
+                                                    )
+                                                    reorderSaving = false
+                                                    showQueueNotice(context.getString(R.string.playlist_reordered))
+                                                    reorderTarget = null
+                                                } else viewModel.reorderPlaylist(reordering, original, reordered) { saved ->
                                                     reorderSaving = false
                                                     showQueueNotice(
                                                         context.getString(
@@ -3390,9 +3773,8 @@ private fun MioriApp(
                                 listState = homeListState,
                                 currentSong = player.song,
                                 isPlaying = player.isPlaying,
-                                title = stringResource(R.string.listen_now),
-                                festiveLogo = diwaliFestive,
-                                onFestiveLogoClick = { showDiwali = true },
+                                title = stringResource(if (hideHomeBranding) R.string.home else R.string.listen_now),
+                                hideBranding = hideHomeBranding,
                                 signedIn = signedIn,
                                 onSignIn = { webSession = WebSessionMode.SIGN_IN },
                                 onItemClick = { item, shelfTitle ->
@@ -3422,16 +3804,23 @@ private fun MioriApp(
                                 contentPadding = listPadding,
                                 onLoadMore = viewModel::loadMoreHome,
                                 loadingMore = homeLoadingMore,
-                                recentlyPlayedLoading = homeRecentlyPlayedLoading && !hideRecents,
+                                recentlyPlayedLoading = homeRecentlyPlayedLoading && !hideHomeRecents,
                                 topPicks = topPicks,
                                 topPicksLoading = topPicksLoading,
                                 listenerName = account?.name,
-                                // Neither shelf is drawn without its callback.
-                                onTopPickClick = openTopPick.takeUnless { hideTopPicks },
+                                onTopPickClick = { pick: TopPick, label: String ->
+                                    if (pick.kind == TopPickKind.MOOD) {
+                                        navigator.push(AppRoute.Moods)
+                                    } else {
+                                        openTopPick(pick, label)
+                                    }
+                                    Unit
+                                }.takeUnless { hideHomeTopPicks },
                                 onMoodClick = playMood.takeUnless { hideHomeMoods },
                                 onMoodsShowAll = { navigator.push(AppRoute.Moods) },
-                                // Nothing on Home is seen while the greeting covers it.
-                                artworkMotion = artworkMotion && !showDiwali,
+                                homeLayout = homeLayout,
+                                onPlaySongs = { songs -> play(songs, 0) },
+                                artworkMotion = artworkMotion,
                                 onTopPickLongPress = { pick ->
                                     pick.browseId?.let { browseId ->
                                         onShelfLongPress(
@@ -3446,7 +3835,36 @@ private fun MioriApp(
                                     }
                                 },
                             )
-                            TAB_EXPLORE -> selectedMoodGenre?.let { category ->
+                            TAB_EXPLORE -> ExploreScreen(
+                                chartsState = exploreCharts,
+                                listState = exploreListState,
+                                onRetry = viewModel::loadExplore,
+                                homeState = homeState,
+                                currentSong = player.song,
+                                isPlaying = player.isPlaying,
+                                onShelfItemClick = { item, shelfTitle ->
+                                    val song = shelfSong(item)
+                                    val browseId = item.browseId
+                                    when {
+                                        song != null -> playRadio(
+                                            song,
+                                            QueueSource(shelfTitle, PlaybackSourceType.HOME),
+                                        )
+                                        browseId != null -> viewModel.openDetail(
+                                            browseId = browseId,
+                                            title = item.title,
+                                            subtitle = item.subtitle,
+                                            thumbnailUrl = item.thumbnailUrl,
+                                        )
+                                    }
+                                },
+                                onShelfItemLongPress = onShelfLongPress,
+                                refreshing = MainViewModel.Feed.EXPLORE in refreshing,
+                                onRefresh = { viewModel.refresh(MainViewModel.Feed.EXPLORE) },
+                                pullState = explorePull,
+                                contentPadding = listPadding,
+                            )
+                            TAB_SEARCH -> selectedMoodGenre?.let { category ->
                                 MoodGenrePlaylistsScreen(
                                     title = category.title,
                                     state = moodGenreShelves,
@@ -3479,17 +3897,7 @@ private fun MioriApp(
                                     onRetry = { viewModel.openMoodGenre(category) },
                                     contentPadding = listPadding,
                                 )
-                            } ?: ExploreScreen(
-                                state = exploreState,
-                                listState = exploreListState,
-                                onCategoryClick = viewModel::openMoodGenre,
-                                onRetry = viewModel::loadExplore,
-                                refreshing = MainViewModel.Feed.EXPLORE in refreshing,
-                                onRefresh = { viewModel.refresh(MainViewModel.Feed.EXPLORE) },
-                                pullState = explorePull,
-                                contentPadding = listPadding,
-                            )
-                            TAB_SEARCH -> SearchScreen(
+                            } ?: SearchScreen(
                                 query = query,
                                 onQueryChange = viewModel::onQueryChange,
                                 filter = filter,
@@ -3621,19 +4029,67 @@ private fun MioriApp(
                                 // suggestions and filters, and a gap reads as a break.
                                 topPadding = topBarHeight() + 4.dp,
                                 showField = false,
+                                showTitle = true,
+                                // Filter control rises to where the profile was (status bar + gap).
+                                filterBarTopPadding = topBarHeight() - com.miori.music.ui.components.TopBarContentHeight + 8.dp,
+                                bottomAnchorInset = if (glassActive && searchTabSeparate) {
+                                    if (searchFieldOpen) searchListInset else null
+                                } else {
+                                    // The plain bottom field: suggestions grow up from it too.
+                                    searchBottomFieldInset
+                                },
+                                listModifier = if (glassSamplesBackdrop) {
+                                    Modifier.layerBackdrop(searchBackdrop)
+                                } else {
+                                    Modifier
+                                },
+                                headerBlur = !reduceDynamicBlur &&
+                                    android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S,
+
                                 // The settings page's own two-state selector, so the
                                 // app has one look for "pick one of these".
-                                sourceSwitcher = {
-                                    SegmentedControl(
-                                        options = listOf(
-                                            stringResource(R.string.search_source_youtube),
-                                            stringResource(R.string.library),
-                                            stringResource(R.string.search_source_addons),
-                                        ),
-                                        selectedIndex = searchSource.ordinal,
-                                        onSelect = { index -> onSearchSourceChange(SearchSource.entries[index]) },
-                                    )
+                                sourceLabels = listOf(
+                                    stringResource(R.string.search_source_youtube),
+                                    stringResource(R.string.library),
+                                    stringResource(R.string.search_source_addons),
+                                ),
+                                sourceIndex = searchSource.ordinal,
+                                onSourceSelect = { index -> onSearchSourceChange(SearchSource.entries[index]) },
+                                sourceMenu = { open, anchor, onDismiss, entries ->
+                                    IosMenuPopover(
+                                        item = if (open) Unit else null,
+                                        anchor = anchor,
+                                        onDismiss = onDismiss,
+                                        backdrop = searchBackdrop,
+                                        placement = IosMenuPlacement.AboveStart,
+                                        dimBackground = false,
+                                        glassRim = true,
+                                        frostAlpha = 0.3f,
+                                        startOffset = (-32).dp,
+                                    ) {
+                                        entries.forEach { entry ->
+                                            IosMenuRow(
+                                                label = entry.label,
+                                                icon = entry.icon,
+                                                onClick = entry.onClick,
+                                                enabled = entry.enabled,
+                                                labelColor = if (entry.selected) MaterialTheme.colorScheme.primary else null,
+                                                trailing = if (entry.selected) ({
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.Check,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.size(20.dp),
+                                                    )
+                                                }) else null,
+                                            )
+                                        }
+                                    }
                                 },
+                                exploreState = exploreState,
+                                onCategoryClick = viewModel::openMoodGenre,
+                                onExploreRetry = viewModel::loadExplore,
+                                fieldFocused = searchFieldFocused,
                                 searchingLibrary = searchSource == SearchSource.LIBRARY,
                                 libraryResults = libraryResults,
                                 searchingAddons = searchSource == SearchSource.ADDONS,
@@ -3689,8 +4145,6 @@ private fun MioriApp(
                                     LibraryReplayEntry(
                                         cards = replayCards,
                                         loading = replay.loading,
-                                        holder = account?.name.orEmpty(),
-                                        memberSince = replay.memberSince,
                                         onOpenReplay = { page ->
                                             replayLandingPage = page
                                             navigator.push(AppRoute.Replay)
@@ -3703,8 +4157,12 @@ private fun MioriApp(
                                 onRefresh = { viewModel.refresh(MainViewModel.Feed.LIBRARY) },
                                 pullState = libraryPull,
                                 contentPadding = listPadding,
-                                links = libraryLinks(),
+                                links = libraryLinks(signedIn),
                                 deviceItems = libraryDeviceItems(downloadedReleases) + localPlaylistItems,
+                                pinnedExtraItems = spotifyPinnedItems,
+                                artistsRow = libraryArtistsRow,
+                                onArtistsRowChange = AppSettings::setLibraryArtistsRow,
+                                layout = libraryLayout,
                             )
                         }
                     }
@@ -3717,7 +4175,10 @@ private fun MioriApp(
                     // the background, or this page on its way out: each frame of
                     // them redraws the page under the glass, for nobody.
                     val barsMotion = artworkMotion && transition.targetState == EnterExitState.Visible
-                    CompositionLocalProvider(LocalPlayingBarsMotion provides barsMotion) {
+                    CompositionLocalProvider(
+                        LocalPlayingBarsMotion provides barsMotion,
+                        LocalCoverVisibilityScope provides this@AnimatedContent,
+                    ) {
                         if (destination is AppDestination.Tab) {
                             pageContent()
                         } else {
@@ -3725,6 +4186,12 @@ private fun MioriApp(
                             pageStates.SaveableStateProvider(key, pageContent)
                         }
                     }
+                }
+
+                // The flying cover goes over the page but under the bars, so it
+                // never rides above the tab bar or the mini player. Inside the
+                // glass source above, so the bars see it while it flies.
+                CoverFlightLayer()
                 }
 
                 // The top-bar footprint is transparent on every page so the
@@ -3760,7 +4227,47 @@ private fun MioriApp(
                     ?.takeIf { isDetailVisible && it.type == BrowseType.ARTIST }
                     ?.let { detailListStates.getOrPut(it.browseId) { LazyListState() } }
                 val homeHeadingVisible = route == null && detail == null && selectedTab == TAB_HOME
+                // Search's large heading is up (field empty, unfocused, nothing searched):
+                // the pill sits level with it as it does on Home. Derived, so typing
+                // recomposes this only when the heading appears or goes.
+                val searchTitleShown by remember(route, detail, selectedMoodGenre, selectedTab) {
+                    derivedStateOf {
+                        route == null && detail == null && selectedMoodGenre == null &&
+                            selectedTab == TAB_SEARCH &&
+                            query.isEmpty() && results == null && !searchFieldFocused
+                    }
+                }
+                // Search results with the filter control up top: the profile pill folds away
+                // for it. Mirrors the page's own condition (results up, no suggestions, YouTube source).
+                val searchFilterBarShown by remember(route, detail, selectedMoodGenre, selectedTab, searchSource) {
+                    derivedStateOf {
+                        route == null && detail == null && selectedMoodGenre == null &&
+                            selectedTab == TAB_SEARCH &&
+                            searchSource != SearchSource.LIBRARY && searchSource != SearchSource.ADDONS &&
+                            results != null && searchSuggestions.isEmpty()
+                    }
+                }
                 val headerListState = artistListState ?: homeListState.takeIf { homeHeadingVisible }
+                // Header (foto profil + pill) turun/naik antara posisi Home dan tab lain
+                // dengan spring sedikit membal, bukan loncat saat tab berpindah.
+                val homeHeaderBlend = animateFloatAsState(
+                    targetValue = if (homeHeadingVisible) 1f else 0f,
+                    animationSpec = androidx.compose.animation.core.spring(
+                        dampingRatio = 0.5f,
+                        stiffness = 260f,
+                    ),
+                    label = "homeHeaderBlend",
+                )
+                // Its own blend, so going between Home and Search hands the pill over
+                // on the same spring instead of jumping when Home was scrolled.
+                val searchHeaderBlend = animateFloatAsState(
+                    targetValue = if (searchTitleShown) 1f else 0f,
+                    animationSpec = androidx.compose.animation.core.spring(
+                        dampingRatio = 0.5f,
+                        stiffness = 260f,
+                    ),
+                    label = "searchHeaderBlend",
+                )
                 val fadeStart = if (artistListState != null) TOP_FADE_START else 0f
                 val fadeRamp = if (artistListState != null) TOP_FADE_RAMP else 1f
                 val topFadeAlpha by remember(headerListState, fadeStart, fadeRamp) {
@@ -3792,6 +4299,11 @@ private fun MioriApp(
                     )
                 }
 
+                // Home: the account pill sits level with the wordmark and rides up
+                // with the feed for that short distance, then stays pinned in the bar.
+                val homeLogoHalf = with(androidx.compose.ui.platform.LocalDensity.current) {
+                    (MaterialTheme.typography.displayLarge.fontSize * 0.9f).toDp()
+                } / 2
                 FrostedTopBar(
                     title = when (route) {
                         AppRoute.Spotify -> stringResource(R.string.spotify)
@@ -3804,7 +4316,6 @@ private fun MioriApp(
                         AppRoute.AccountScrobbling -> stringResource(R.string.account_scrobbling)
                         AppRoute.Sources -> stringResource(R.string.sources)
                         AppRoute.ListenTogether -> stringResource(R.string.listen_together)
-                        AppRoute.WearOs -> stringResource(R.string.wear_os_page_title)
                         AppRoute.Equalizer -> stringResource(R.string.equalizer)
                         AppRoute.Settings -> stringResource(R.string.settings)
                         is AppRoute.SettingsSection -> stringResource(route.category.title)
@@ -3826,8 +4337,31 @@ private fun MioriApp(
                     artworkPageChrome = true,
                     backButtonHazeState = hazeState,
                     trailingTitle = if (detail != null && detailActiveShelf != null) detail.title else null,
-                    // Search has no large in-list header to hand the title back to —
-                    // the field takes that space — so its bar title is always up.
+                    // Judul halaman Settings dan turunannya pindah ke pil
+                    // melayang di kanan tombol back, memudar saat di-scroll.
+                    floatingTitle = if (detail == null && selectedMoodGenre == null) {
+                        when (route) {
+                            AppRoute.Settings -> stringResource(R.string.settings)
+                            is AppRoute.SettingsSection ->
+                                com.miori.music.ui.screens.settingsCategoryBarTitle(route.category)
+                            is AppRoute.SettingsChoice ->
+                                com.miori.music.ui.screens.settingsChoiceBarTitle(route.choice)
+                            AppRoute.AccountScrobbling -> stringResource(R.string.bar_title_account)
+                            AppRoute.Discord -> stringResource(R.string.discord)
+                            AppRoute.Equalizer -> stringResource(R.string.equalizer)
+                            AppRoute.EqualizerPresets -> stringResource(R.string.equalizer_preset)
+                            AppRoute.ListenTogether -> stringResource(R.string.listen_together)
+                            AppRoute.Sources -> stringResource(R.string.source)
+                            else -> null
+                        }
+                    } else null,
+                    floatingTitleAlpha = {
+                        (1f - pageScroll.floatValue / pageTitleFadePx).coerceIn(0f, 1f)
+                    },
+                    actionsHidden = showAccountSelector && !accountSelectorLeaving,
+                    actionsCollapsed = searchFilterBarShown,
+                    // Judul besar "Search" ada di header halaman selama field kosong
+                    // dan belum fokus; judul bar baru naik setelah itu hilang.
                     scrolled = {
                         when {
                             // The page leads with its own large "Replay", so the bar
@@ -3837,51 +4371,48 @@ private fun MioriApp(
                             detail != null && detailActiveShelf != null -> true
                             detail != null -> detailScrolled
                             selectedMoodGenre != null -> true
-                            else -> scrolled || selectedTab == TAB_SEARCH
+                            else -> scrolled || (
+                                selectedTab == TAB_SEARCH &&
+                                    (query.isNotEmpty() || results != null || searchFieldFocused)
+                                )
                         }
                     },
                     refreshing = currentFeed != null && currentFeed in refreshing,
-                    pullFraction = { currentPull?.distanceFraction ?: 0f },
                     // The same step the back gesture takes — see [goBack] —
                     // offered on anything pushed over a tab.
                     onBack = when {
                         route != null || detail != null || selectedMoodGenre != null -> goBack
                         else -> null
                     },
-                    modifier = Modifier.align(Alignment.TopCenter),
-                    // Only on the Search tab itself, not on anything pushed over it.
-                    accessory = if (
-                        selectedTab == TAB_SEARCH && route == null && detail == null && selectedMoodGenre == null
-                    ) {
-                        {
-                            // The search field lives up here in the bar, beside the
-                            // account photo, so it answers the nav bar's Search tap
-                            // itself: focus and keyboard, the way the page used to.
-                            val keyboard = LocalSoftwareKeyboardController.current
-                            LaunchedEffect(searchFocusRequested) {
-                                if (searchFocusRequested) {
-                                    searchFieldFocus.requestFocus()
-                                    keyboard?.show()
-                                    searchFocusRequested = false
-                                }
-                            }
-                            SearchField(
-                                query = query,
-                                onQueryChange = viewModel::onQueryChange,
-                                onSubmit = viewModel::submitSearch,
-                                focusRequester = searchFieldFocus,
-                                placeholder = org.jetbrains.compose.resources.stringResource(
-                                    if (searchSource == SearchSource.LIBRARY) {
-                                        SharedRes.string.search_library_hint
-                                    } else if (searchSource == SearchSource.ADDONS) {
-                                        SharedRes.string.search_addons_hint
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .graphicsLayer {
+                            val blend = homeHeaderBlend.value
+                            val searchBlend = searchHeaderBlend.value
+                            if (blend != 0f || searchBlend != 0f) {
+                                val rest = (18.dp + homeLogoHalf).toPx()
+                                var shift = 0f
+                                if (blend != 0f) {
+                                    val scrolledPx = if (homeListState.firstVisibleItemIndex > 0) {
+                                        rest
                                     } else {
-                                        SharedRes.string.search_hint
-                                    },
-                                ),
-                            )
-                        }
-                    } else null,
+                                        homeListState.firstVisibleItemScrollOffset.toFloat()
+                                    }
+                                    shift += blend * (rest - scrolledPx).coerceAtLeast(0f)
+                                }
+                                if (searchBlend != 0f) {
+                                    val scrolledPx = if (searchListState.firstVisibleItemIndex > 0) {
+                                        rest
+                                    } else {
+                                        searchListState.firstVisibleItemScrollOffset.toFloat()
+                                    }
+                                    shift += searchBlend * (rest - scrolledPx).coerceAtLeast(0f)
+                                }
+                                translationY = shift
+                            }
+                        },
+                    // Field search pindah ke bawah (SearchBottomField), bukan lagi di bar atas.
+                    accessory = null,
                     actions = {
                         // This is intentionally scoped to Listen together: the
                         // round-trip time is meaningful while coordinating a
@@ -3994,23 +4525,8 @@ private fun MioriApp(
                                             tint = MaterialTheme.colorScheme.onSurface,
                                         )
                                     }
-                                    DropdownMenu(
-                                        expanded = librarySortMenuOpen,
-                                        onDismissRequest = { librarySortMenuOpen = false },
-                                    ) {
-                                        LibrarySort.entries.forEach { option ->
-                                            DropdownMenuItem(
-                                                text = { Text(option.localizedLabel()) },
-                                                trailingIcon = if (option == librarySort) {
-                                                    { Icon(Icons.Rounded.Check, contentDescription = null) }
-                                                } else null,
-                                                onClick = {
-                                                    AppSettings.setLibrarySort(option)
-                                                    librarySortMenuOpen = false
-                                                },
-                                            )
-                                        }
-                                    }
+                                    // The menu itself is a FrostedMenuPanel, composed
+                                    // with the other frosted overlays further down.
                                 }
                             }
                             // Sort, only on an album or playlist page or a device
@@ -4024,7 +4540,9 @@ private fun MioriApp(
                             // Shuffle / Play / Add.
                             if ((isReleaseDetail || isLocalDetail) && detail != null) {
                                 val releaseSongs = (detail.songs as? UiState.Success)?.data.orEmpty()
-                                if (releaseSongs.isNotEmpty()) {
+                                // An active search keeps the row open so its close button stays reachable.
+                                val actionsOpen = detailActionsExpanded || detailSearching
+                                ActionReveal(visible = actionsOpen && releaseSongs.isNotEmpty()) {
                                     IconButton(onClick = { detailSearching = !detailSearching }) {
                                         Icon(
                                             if (detailSearching) Icons.Rounded.Close else MioriIcons.Search,
@@ -4039,6 +4557,7 @@ private fun MioriApp(
                                 // with the app's other frosted overlays further
                                 // down — in the main hierarchy, where the haze
                                 // can see the content it blurs.
+                                ActionReveal(visible = actionsOpen) {
                                 IconButton(
                                     onClick = { if (isLocalDetail) folderMenuOpen = true else songSortMenuOpen = true },
                                 ) {
@@ -4050,7 +4569,11 @@ private fun MioriApp(
                                         tint = MaterialTheme.colorScheme.onSurface,
                                     )
                                 }
-                                if (isReleaseDetail && releaseSongs.isNotEmpty()) {
+                                }
+                                // The same ••• is both the unfold button at rest and the
+                                // overflow once open: the bar grows to its left, so it
+                                // simply slides into place while the xmark bounces in.
+                                ActionReveal(visible = !actionsOpen || (isReleaseDetail && releaseSongs.isNotEmpty())) {
                                     // The page's own tracks, in the order the page
                                     // shows them, so the sheet has them already and
                                     // Play, Shuffle and Open are the buttons beside
@@ -4062,7 +4585,7 @@ private fun MioriApp(
                                     IconButton(
                                         modifier = Modifier.menuAnchor(),
                                         onClick = {
-                                            openBrowseMenu(BrowseTarget(
+                                            if (!actionsOpen) detailActionsExpanded = true else openBrowseMenu(BrowseTarget(
                                                 browseId = detail.browseId,
                                                 title = detail.title,
                                                 subtitle = detail.subtitle,
@@ -4087,6 +4610,21 @@ private fun MioriApp(
                                         )
                                     }
                                 }
+                                // Folds the actions again, closing any open search.
+                                ActionReveal(visible = actionsOpen, bounce = true) {
+                                    IconButton(
+                                        onClick = {
+                                            detailSearching = false
+                                            detailActionsExpanded = false
+                                        },
+                                    ) {
+                                        Icon(
+                                            SfIcons.Close,
+                                            contentDescription = stringResource(R.string.close),
+                                            tint = MaterialTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                }
                             }
                             // Left of the account photo, on an artist page: iOS's
                             // share glyph, sending the artist's channel link — the
@@ -4107,7 +4645,7 @@ private fun MioriApp(
                                     },
                                 ) {
                                     Icon(
-                                        Icons.Rounded.IosShare,
+                                        SfIcons.Share,
                                         contentDescription = stringResource(R.string.share),
                                         tint = MaterialTheme.colorScheme.onSurface,
                                     )
@@ -4123,9 +4661,22 @@ private fun MioriApp(
                             }
                             // Not on a release page, whose pill already carries
                             // three of its own controls — Apple Music leaves the
-                            // profile off its album pages too.
-                            if (!isReleaseDetail) TopBarAccountButton(
-                                account = account,
+                            // profile off its album pages too. Nor on Listen
+                            // together, where the pill is the server's round trip.
+                            if (!isReleaseDetail && route != AppRoute.ListenTogether) TopBarAccountButton(
+                                // Offline the account request fails and `account` stays null;
+                                // the profile saved on the device (what the popup reads) stands in.
+                                account = account ?: googleAccounts
+                                    .firstOrNull { it.accountId == activeAccountId }
+                                    ?.let { saved ->
+                                        val profile = saved.profiles.firstOrNull { it.profileId == activeProfileId }
+                                            ?: saved.profiles.firstOrNull()
+                                        com.miori.music.data.model.Account(
+                                            name = profile?.name ?: saved.name,
+                                            email = saved.email,
+                                            thumbnailUrl = profile?.avatar,
+                                        )
+                                    },
                                 onClick = {
                                     if (signedIn) {
                                         viewModel.loadChannels()
@@ -4133,6 +4684,7 @@ private fun MioriApp(
                                     } else navigator.push(AppRoute.Settings)
                                 },
                                 onSwipeProfile = { forward -> viewModel.stepProfile(forward) },
+                                hidden = showAccountSelector && !accountSelectorLeaving,
                             )
                         }
                     },
@@ -4151,6 +4703,10 @@ private fun MioriApp(
                 // Whichever bar is drawing reports its height here, for the
                 // guard to read at layout — never in composition, see the guard.
                 val floatingBarsHeight = remember { mutableIntStateOf(0) }
+                LaunchedEffect(Unit) {
+                    androidx.compose.runtime.snapshotFlow { floatingBarsHeight.intValue }
+                        .collect { searchBottomBarsPx = it }
+                }
                 FloatingBarsTapGuard(
                     barsHeight = { floatingBarsHeight.intValue },
                     modifier = Modifier.align(Alignment.BottomCenter),
@@ -4159,20 +4715,254 @@ private fun MioriApp(
                 // One tab handler, whichever bar is drawing it.
                 // A tab is a fresh start: everything pushed over the old one —
                 // routes and release pages alike — goes with it.
-                val onTabSelected: (Int) -> Unit = { index ->
+                // The bar's position of the highlighted tab. With the Listen
+                // Together tab on, it sits at TAB_LIBRARY (right of Explore)
+                // and Library and Search each move one place right; it is lit
+                // whenever its page is the one showing.
+                val selectedBarIndex = when {
+                    !listenTogetherTab -> selectedTab
+                    route == AppRoute.ListenTogether -> TAB_LIBRARY
+                    selectedTab >= TAB_LIBRARY -> selectedTab + 1
+                    else -> selectedTab
+                }
+                // Remember the last tab that was not Search. Read only off a
+                // tab, never off Search, so the morph always has a tab to fold to.
+                LaunchedEffect(selectedTab, selectedBarIndex) {
+                    if (selectedTab != TAB_SEARCH) lastBarTab = selectedBarIndex
+                }
+                val onTabSelected: (Int) -> Unit = tabSelected@{ barIndex ->
+                    if (listenTogetherTab && barIndex == TAB_LIBRARY) {
+                        if (route != AppRoute.ListenTogether) {
+                            navigator.clear()
+                            viewModel.closeMoodGenre()
+                            navigator.push(AppRoute.ListenTogether)
+                        }
+                        return@tabSelected
+                    }
+                    val index = if (listenTogetherTab && barIndex > TAB_LIBRARY) barIndex - 1 else barIndex
+                    // Liquid glass separate Search: entering the tab expands the Search
+                    // circle into the field right away, still unfocused (categories stay).
+                    // Otherwise, tapping Search while already on the categories opens the field.
+                    val glassSeparateSearch = glassActive && searchTabSeparate
+                    val reopenField = index == TAB_SEARCH && (
+                        glassSeparateSearch || (
+                            selectedTab == TAB_SEARCH &&
+                                route == null && detail == null && selectedMoodGenre == null
+                            )
+                        )
                     navigator.clear()
                     viewModel.closeMoodGenre()
                     selectedTab = index
+                    // Search keeps its list state across tabs; rewind it before the
+                    // page's first frame instead of after it, so there is no visible jump.
+                    if (index == TAB_SEARCH) searchListState.requestScrollToItem(0)
+                    searchFieldFocused = false
+                    searchFromInline = glassActive && searchTabSeparate &&
+                        index == TAB_SEARCH && navBarScroll.isInline
+                    // The inline state belongs to Search's own scrolling. Leaving Search
+                    // expands the bar again, so Home shows the mini player above it.
+                    if (index != TAB_SEARCH && navBarScroll.isInline) navBarScroll.expand()
+                    searchFieldOpen = reopenField
+                    searchFieldExpanded = reopenField
 
-                    // Every search tab tap resets the field, focuses it, and opens
-                    // the keyboard through SearchScreen's focus request.
                     if (index == TAB_SEARCH) {
                         viewModel.onQueryChange("")
-                        searchFocusRequested = true
+                        // Liquid glass separate Search: the circle only expands here.
+                        // Focus (keyboard + recent searches) waits for a tap on the input.
+                        searchFocusRequested = reopenField && !(glassActive && searchTabSeparate)
                     }
                 }
 
-                if (glassActive) Column(
+                // Field search melayang di atas nav bar (gaya Apple Music), baik
+                // Search terpisah maupun menyatu di pill. Naik mengikuti keyboard.
+                val searchActive = selectedTab == TAB_SEARCH && route == null && detail == null && selectedMoodGenre == null
+                // Separate Search on liquid glass: the bar itself becomes the search morph.
+                val searchMorph = searchActive && glassActive && searchTabSeparate && searchFieldOpen
+                // Leaving the categories (tab, category page, route) closes the field.
+                LaunchedEffect(searchActive) {
+                    if (!searchActive) {
+                        searchFieldOpen = false
+                    } else if (glassActive && searchTabSeparate && !searchFieldOpen) {
+                        // Back from a category page or route: expand again, unfocused.
+                        searchFromInline = navBarScroll.isInline
+                        searchFieldFocused = false
+                        searchFieldOpen = true
+                        searchFieldExpanded = true
+                    }
+                }
+                if (searchActive && !searchMorph && !(glassActive && searchTabSeparate)) {
+                    SearchBottomField(
+                        query = query,
+                        onQueryChange = viewModel::onQueryChange,
+                        onSubmit = viewModel::submitSearch,
+                        focusRequester = searchFieldFocus,
+                        focusRequested = searchFocusRequested,
+                        onFocusHandled = { searchFocusRequested = false },
+                        onFocusChange = { searchFieldFocused = it },
+                        placeholder = org.jetbrains.compose.resources.stringResource(
+                            if (searchSource == SearchSource.LIBRARY) {
+                                SharedRes.string.search_library_hint
+                            } else if (searchSource == SearchSource.ADDONS) {
+                                SharedRes.string.search_addons_hint
+                            } else {
+                                SharedRes.string.search_hint
+                            },
+                        ),
+                        barsHeight = { floatingBarsHeight.intValue },
+                        onSourceMenuClick = { anchor ->
+                            val sourceIcons = listOf(SfIcons.PlayCircle, MioriIcons.TabLibrary, SfIcons.Extension)
+                            val sourceNames = listOf(
+                                context.getString(R.string.search_source_youtube),
+                                context.getString(R.string.library),
+                                context.getString(R.string.search_source_addons),
+                            )
+                            searchSourceMenu = SourceMenuRequest(
+                                anchor = anchor,
+                                entries = sourceNames.mapIndexed { index, label ->
+                                    com.miori.music.ui.player.LyricsMenuEntry(
+                                        label = label,
+                                        icon = sourceIcons[index],
+                                        enabled = true,
+                                        selected = index == searchSource.ordinal,
+                                        onClick = {
+                                            searchSourceMenu = null
+                                            viewModel.setSearchSource(SearchSource.entries[index])
+                                            if (query.isNotBlank()) viewModel.submitSearch()
+                                        },
+                                    )
+                                },
+                                onDismiss = { searchSourceMenu = null },
+                            )
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .widthIn(max = FLOATING_BAR_MAX_WIDTH)
+                            .fillMaxWidth(),
+                    )
+                }
+
+                // Read here, in composition: WindowInsets.ime is a @Composable getter.
+                val imeInsets = WindowInsets.ime
+                // The mini player steps aside while the input is focused with the
+                // keyboard up, and returns when the keyboard closes or focus leaves.
+                val searchDensity = LocalDensity.current
+                val searchImeOpen by remember {
+                    androidx.compose.runtime.derivedStateOf { imeInsets.getBottom(searchDensity) > 0 }
+                }
+                val miniHide by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (searchFieldFocused && searchImeOpen) 1f else 0f,
+                    animationSpec = androidx.compose.animation.core.spring(
+                        dampingRatio = 0.9f,
+                        stiffness = 600f,
+                    ),
+                    label = "searchMiniHide",
+                )
+                // The bar's own open progress, read straight from its spring (no hoisted
+                // copy that lags a frame, no recomposition mid-animation): the mini
+                // player's rise, width and density all follow this one value.
+                val miniOpenProgress: () -> Float = { searchOpenState?.value?.coerceIn(0f, 1f) ?: 0f }
+                if (searchMorph) Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .widthIn(max = FLOATING_BAR_MAX_WIDTH)
+                        .fillMaxWidth()
+                        // Lifts the whole stack, mini player included, above the keyboard.
+                        .offset { IntOffset(0, -imeInsets.getBottom(this)) }
+                        .onSizeChanged {
+                            floatingBarsHeight.intValue = it.height
+                            searchStackHeightPx = it.height
+                        },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    QueueActionNoticeHost(queueNotice)
+                    player.song?.let { song ->
+                        GlassMiniPlayer(
+                            song = song,
+                            isPlaying = player.isPlaying,
+                            isLoading = playPauseBusy,
+                            onPlayPause = {
+                                togglePlayPause()
+                            },
+                            onNext = { controller?.seekToNextMediaItem() },
+                            onPrevious = { controller?.seekToPrevious() },
+                            onExpand = if (reducePlayerMotion) {
+                                { showNowPlaying = true }
+                            } else {
+                                playerSheetMotion::open
+                            },
+                            controlsLocked = controlsLocked,
+                            onBlockedControl = showHostOnlyNotice,
+                            dock = activeDock,
+                            pull = playerSheetMotion.takeIf { !reducePlayerMotion },
+                            inlineDensity = searchFromInline,
+                            inlineProgress = if (searchFromInline) {
+                                { 1f - miniOpenProgress() }
+                            } else {
+                                null
+                            },
+                            // From the collapsed bar the pill starts in its slot between
+                            // the circles and rises while the Search circle opens leftward.
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .searchMiniHide { miniHide }
+                                .searchMiniRise { if (searchFromInline) miniOpenProgress() else 1f },
+                        )
+                        // Gap shrinks as the search morph opens: the visible search circle is
+                        // ~7dp lower than the 62dp nav pill, so the mini player drops to fill it.
+                        Spacer(
+                            Modifier.layout { _, constraints ->
+                                val p = miniOpenProgress().coerceIn(0f, 1f)
+                                val gapPx = (8.dp.toPx() + (1.dp.toPx() - 8.dp.toPx()) * p).toInt()
+                                layout(constraints.maxWidth, gapPx) {}
+                            },
+                        )
+                    }
+                    GlassSearchBar(
+                        startInline = searchFromInline,
+                        onOpenState = { searchOpenState = it },
+                        tabs = barTabs.dropLast(1),
+                        lastTab = barTabs[lastBarTab.coerceIn(0, barTabs.lastIndex)],
+                        open = searchFieldExpanded,
+                        onLastTabClick = { searchFieldExpanded = false },
+                        onClose = { searchFieldExpanded = false },
+                        onClosed = {
+                            searchFieldFocused = false
+                            searchFieldOpen = false
+                            // Selama morph tampil, scroll halaman Search tetap menggerakkan
+                            // navBarScroll padahal bar yang terlihat bukan GlassNavBar. Pulihkan
+                            // bentuk saat morph dibuka, supaya mini player tidak loncat ke inline.
+                            if (searchFromInline) navBarScroll.inline() else navBarScroll.expand()
+                        },
+                        query = query,
+                        onQueryChange = viewModel::onQueryChange,
+                        onSubmit = viewModel::submitSearch,
+                        focusRequester = searchFieldFocus,
+                        focusRequested = searchFocusRequested,
+                        onFocusHandled = { searchFocusRequested = false },
+                        onFocusChange = { searchFieldFocused = it },
+                        placeholder = org.jetbrains.compose.resources.stringResource(
+                            if (searchSource == SearchSource.LIBRARY) {
+                                SharedRes.string.search_library_hint
+                            } else if (searchSource == SearchSource.ADDONS) {
+                                SharedRes.string.search_addons_hint
+                            } else {
+                                SharedRes.string.search_hint
+                            },
+                        ),
+                        sourceLabels = listOf(
+                            stringResource(R.string.search_source_youtube),
+                            stringResource(R.string.library),
+                            stringResource(R.string.search_source_addons),
+                        ),
+                        sourceIndex = searchSource.ordinal,
+                        onSourceSelect = { index ->
+                            viewModel.setSearchSource(SearchSource.entries[index])
+                            if (query.isNotBlank()) viewModel.submitSearch()
+                        },
+                        onSourceMenu = { searchSourceMenu = it },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else if (glassActive) Column(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .widthIn(max = FLOATING_BAR_MAX_WIDTH)
@@ -4185,9 +4975,10 @@ private fun MioriApp(
                     // controls dock into the tab bar rather than riding above it,
                     // and the pair folds together on scroll. See [GlassNavBar].
                     GlassNavBar(
-                        tabs = tabs,
-                        selectedIndex = selectedTab,
+                        tabs = barTabs,
+                        selectedIndex = selectedBarIndex,
                         onTabSelected = onTabSelected,
+                        searchSeparate = searchTabSeparate,
                         scrollConnection = navBarScroll,
                         song = player.song,
                         isPlaying = player.isPlaying,
@@ -4248,8 +5039,8 @@ private fun MioriApp(
                         Spacer(Modifier.height(8.dp))
                     }
                     FloatingBottomBar(
-                        tabs = tabs,
-                        selectedIndex = selectedTab,
+                        tabs = barTabs,
+                        selectedIndex = selectedBarIndex,
                         hazeState = hazeState,
                         onTabSelected = onTabSelected,
                     )
@@ -4260,6 +5051,17 @@ private fun MioriApp(
 
         val playerRaised = showNowPlaying && playerSong != null
 
+        // Player dibuka di atas halaman pencarian: kolom input yang masih fokus
+        // meninggalkan handle kursor dan keyboard di atas player. Lepas fokusnya.
+        val playerFocusManager = LocalFocusManager.current
+        val playerKeyboard = LocalSoftwareKeyboardController.current
+        LaunchedEffect(playerRaised) {
+            if (playerRaised) {
+                playerKeyboard?.hide()
+                playerFocusManager.clearFocus(force = true)
+            }
+        }
+
         // ---- The page's still, for a menu hung over it ----
         // Taken as a ⋮ or ⋯ menu opens over a page, let go once it has played
         // its way out — see [pageBackdrop]. Read in a scope of its own, as
@@ -4267,7 +5069,9 @@ private fun MioriApp(
         Isolated {
             val pageMenuUp =
                 (songActions != null && songMenuOrigin == null && !(menuFromPlayer && playerRaised)) ||
-                    (browseActions != null && browseMenuOrigin == null && !browseRenameInSheet)
+                    (browseActions != null && browseMenuOrigin == null && !browseRenameInSheet) ||
+                    songInfoTarget != null ||
+                    searchSourceMenu != null
             LaunchedEffect(pageMenuUp, reduceDynamicBlur) {
                 if (pageMenuUp && !reduceDynamicBlur && isGlassSupported()) {
                     pageBackdrop.capture()
@@ -4446,12 +5250,14 @@ private fun MioriApp(
             // so "Remove from cache" is only offered for a track it holds.
             // Re-asked when the cache changes, which is what drops the row
             // once the track has gone.
-            val automixOn by AppSettings.smartFadeEnabled.collectAsStateWithLifecycle()
             val cacheVersion by AudioCache.contentsChanged.collectAsStateWithLifecycle()
             val inCache by produceState(false, song.videoId, cacheVersion) {
                 value = song.localUri == null &&
                     withContext(Dispatchers.IO) { AudioCache.holds(song.videoId) }
             }
+            val trackSpatialOverrides by AppSettings.spatialAudioByTrack.collectAsStateWithLifecycle()
+            val spatialAudioGlobal by AppSettings.spatialAudio.collectAsStateWithLifecycle()
+            val spatialAudioOn = trackSpatialOverrides[song.videoId] ?: spatialAudioGlobal
             SongActionsMenu(
                 song = song,
                 signedIn = signedIn,
@@ -4501,6 +5307,7 @@ private fun MioriApp(
                         controller?.seekToNextMediaItem()
                     }
                 },
+                canAddToPlaylist = localPlaylists.isNotEmpty(),
                 onAddToPlaylist = {
                     songActions = null
                     if (song.localUri != null && (song.videoId.startsWith("content://") || song.videoId.startsWith("file://"))) {
@@ -4516,6 +5323,16 @@ private fun MioriApp(
                         viewModel.removeFromPlaylist(it.browseId, song)
                     }
                 } ?: detail?.browseId
+                    ?.takeIf {
+                        !fromPlayer && com.miori.music.data.spotify.LocalPlaylistStore.getPlaylist(it) != null
+                    }
+                    ?.let { id ->
+                        {
+                            songActions = null
+                            com.miori.music.data.spotify.LocalPlaylistStore.removeSong(id, song.videoId)
+                        }
+                    }
+                    ?: detail?.browseId
                     ?.takeIf { !fromPlayer && song.localUri != null && OfflinePlaylists.isOfflinePlaylist(it) }
                     ?.let { id ->
                         {
@@ -4554,6 +5371,16 @@ private fun MioriApp(
                 // looked up as the menu opens — see `needsLinks` above.
                 resolvingLinks = if (fromPlayer) linksLoading else needsLinks && menuLinksLoading,
                 showSleepTimer = fromPlayer,
+                // Song Info: menu langsung menutup, popup-nya tampil sendiri.
+                onShowSongInfo = { info ->
+                    songInfoBackdrop = if (menuFromPlayer && playerRaised && songMenuOrigin == null) {
+                        if (playerLiveCanvas) livePlayerBackdrop else playerBackdrop
+                    } else {
+                        pageBackdrop
+                    }
+                    songInfoTarget = info
+                    songActions = null
+                },
                 // Offered for every playing track with a YouTube upload
                 // behind it, not only for one an upgrade visibly swapped:
                 // a source ranked above YouTube can be playing its own
@@ -4612,7 +5439,8 @@ private fun MioriApp(
                 upgradeQualityInProgress = fromPlayer && song.videoId in qualityUpgradesInFlight,
                 onToggleAudioVersion = onToggleVersion,
                 isAudioVersion = menuIsAudioVersion,
-                audioVersionMissing = song.videoId in missingVersions,
+                audioVersionMissing = song.videoId in missingVersions ||
+                    (song.isVideo && YtMusicRepository.hasNoAudioVersion(song.videoId)),
                 // Hidden outright when there's no real YouTube id behind
                 // this row to build a link from — SongActionsMenu already
                 // drops it for a local file via `isOffline`, this catches
@@ -4650,165 +5478,97 @@ private fun MioriApp(
                 } else {
                     null
                 },
-                // The popup lives in the player, so the menu only has to close
-                // and ask for it; it lays the next transition out on its own.
-                onAutomixOverview = if (fromPlayer && automixOn) {
-                    {
-                        songActions = null
-                        MixViewRequest.open = true
-                    }
+                onToggleSpatialAudio = if (fromPlayer && song.videoId.isNotBlank()) {
+                    { AppSettings.setSpatialAudioForTrack(song.videoId, !spatialAudioOn) }
                 } else {
                     null
                 },
+                spatialAudioOn = spatialAudioOn,
             )
         }
         // ---- Now Playing ----
-        if (playerRaised) {
-            // What rememberModalBottomSheetState builds, but able to start open,
-            // and with every hide routed through [playerSheetMotion] — a drag
-            // released low, a back press, a tap on the scrim. Refused here and
-            // carried out there, on a curve slow enough to watch the artwork
-            // fly home on, rather than on the sheet's own.
-            val sheetDensity = LocalDensity.current
-            val confirmSheetValue: (SheetValue) -> Boolean = { value ->
-                // Read when asked, not when the sheet was made: the setting
-                // can change while the player is up.
-                if (value == SheetValue.Hidden && !reducePlayerMotion) {
-                    playerSheetMotion.close()
-                    false
-                } else {
-                    true
-                }
-            }
-            val nowPlayingSheetState = rememberSaveable(
-                saver = SheetState.Saver(
-                    skipPartiallyExpanded = true,
-                    confirmValueChange = confirmSheetValue,
-                    density = sheetDensity,
-                    skipHiddenState = false,
-                ),
-            ) {
-                SheetState(
-                    skipPartiallyExpanded = true,
-                    density = sheetDensity,
-                    // Already open when the app is the one raising it: its
-                    // content is held down, and slid up, by the motion.
-                    initialValue = if (playerSheetMotion.holding) SheetValue.Expanded else SheetValue.Hidden,
-                    confirmValueChange = confirmSheetValue,
-                )
-            }
-            DisposableEffect(nowPlayingSheetState) {
-                playerSheetMotion.sheet = nowPlayingSheetState
+        // One panel, in this window: the mini player's pill and the full player
+        // are the same glass container, which grows from the pill's rect to the
+        // whole window under the finger. Not a ModalBottomSheet any more, so
+        // what the sheet's window used to give the player is carried out here:
+        // back, the drag down to put it away (see [playerPullDown]) and the ⋯
+        // menu above it. The volume keys reach the activity, which already
+        // handles them.
+        if (playerRaised && playerSong != null) {
+            DisposableEffect(playerSheetMotion) {
                 playerDock.sheetOffset = playerSheetMotion::position
                 onDispose {
                     playerDock.sheetOffset = null
                     playerSheetMotion.onSheetGone()
                 }
             }
-            ModalBottomSheet(
-                onDismissRequest = { showNowPlaying = false },
-                sheetState = nowPlayingSheetState,
-                // None of M3's: it follows the sheet's own animation, which is
-                // no longer what moves the player. The player draws its own,
-                // off where the player actually is — see the content below.
-                scrimColor = if (reducePlayerMotion) BottomSheetDefaults.ScrimColor else Color.Transparent,
-                // The player fills the screen and paints its own background to
-                // the very top, so the sheet's default 28.dp top corners would
-                // only cut two notches out of the artwork behind the status bar.
-                // Square, and not clipped along its top — see [PlayerSheetShape].
-                shape = PlayerSheetShape,
-                containerColor = Color.Transparent,
-                dragHandle = null,
-                contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
-                // M3 caps a bottom sheet at [BottomSheetDefaults.SheetMaxWidth]
-                // (640.dp) and centres it once the window is wider than that —
-                // built for a sheet that's meant to look like a sheet next to
-                // visible content either side. This one is the whole player;
-                // capped at 640dp on a tablet it renders as a narrow card with
-                // the page it's supposed to be covering visible down both
-                // sides. Unspecified opts out of the cap entirely, so the
-                // sheet always spans the full window this app draws it for.
-                sheetMaxWidth = Dp.Unspecified,
-                // Back is the app's to carry out, like every other close — see
-                // the handler below. Left to M3, a back press is the one close
-                // that never asks `confirmValueChange`: the sheet hides itself
-                // straight away on its own curve, then the window leaves on its
-                // exit animation with the artwork still drawn in it.
-                properties = ModalBottomSheetProperties(shouldDismissOnBackPress = reducePlayerMotion),
-            ) {
-                // With M3's own back off, the dialog's dispatcher ends here.
-                // Composed ahead of the player, so the player's own handlers —
-                // the lyrics and the queue putting themselves away first — are
-                // newer and are asked before this one.
-                BackHandler(enabled = !reducePlayerMotion) { playerSheetMotion.close() }
-                // Keeps a sheet still "settling" after a lyrics or queue
-                // scroll from taking the next touch meant for that list.
-                // See [PlayerSheetMotion.attachWindow].
-                val sheetWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
-                // The player's window holds focus while it is up, so the volume
-                // keys reach it rather than the activity.
-                DacVolumeKeys()
-                DisposableEffect(sheetWindow, reducePlayerMotion) {
-                    if (!reducePlayerMotion) playerSheetMotion.attachWindow(sheetWindow)
-                    onDispose { }
+            // Back is the app's to carry out, like every other close. Composed
+            // ahead of the player, so the player's own handlers — the lyrics
+            // and the queue putting themselves away first — are newer and are
+            // asked before this one.
+            BackHandler { dismissPlayer() }
+            // The still the ⋯ menu below blurs under its panel — taken by the
+            // tap that opens it (see onOpenMenu), let go once the menu has
+            // played its way out. Not under "reduce dynamic blur": the panel
+            // is opaque then.
+            // Add Songs to Queue: popup kaca di tengah player. Memakai query/hasil
+            // yang sama dengan tab Search, jadi dibersihkan saat dibuka dan ditutup.
+            val addSongsOpen by AddSongsRequest.open.collectAsStateWithLifecycle()
+            val addSongsTypeahead by viewModel.typeaheadResults.collectAsStateWithLifecycle()
+            // null = masih dimuat; kosong = tidak ada rekomendasi.
+            var addSongsSuggestions by remember { mutableStateOf<List<Song>?>(null) }
+            var addSongsPrevFilter by remember { mutableStateOf<SearchFilter?>(null) }
+            DisposableEffect(Unit) {
+                AddSongsRequest.hide()
+                onDispose {
+                    if (AddSongsRequest.open.value) {
+                        viewModel.onQueryChange("")
+                        addSongsPrevFilter?.let { viewModel.onFilterChange(it) }
+                    }
+                    AddSongsRequest.hide()
                 }
-                Box(
-                    Modifier
-                        // Where the app is holding the player, if it is — see
-                        // [PlayerSheetMotion.contentOffsetPx]. Placement only.
-                        .offset { IntOffset(0, playerSheetMotion.contentOffsetPx()) }
-                        // The dim behind the player, from the window's top to
-                        // its bottom whatever the player's offset, and as deep
-                        // as the player is open.
-                        .drawBehind {
-                            val open = playerDock.openFraction()
-                            // Not at all under a portrait player that is fully up:
-                            // its own background is opaque, and a full-screen
-                            // blend behind it is paid on every frame the window
-                            // draws for nothing anyone can see.
-                            if (!reducePlayerMotion && open > 0f && !(open >= 1f && playerDock.attached)) {
-                                val top = playerSheetMotion.position().takeUnless { it.isNaN() } ?: 0f
-                                drawRect(
-                                    color = Color.Black.copy(alpha = PLAYER_SCRIM_ALPHA * open),
-                                    topLeft = Offset(0f, -top.toInt().toFloat()),
-                                    size = Size(size.width, size.height),
-                                )
-                            }
-                        }
-                        .guardSheetFromContentTouches(nowPlayingSheetState)
-                        // The sheet fills the window, so its height is the
-                        // whole of its travel: hidden sits that far down.
-                        .onSizeChanged {
-                            playerDock.sheetTravel = it.height.toFloat()
-                            playerSheetMotion.laidOut = true
-                        },
-                ) {
-                    // The still the ⋯ menu below blurs under its panel — taken
-                    // by the tap that opens it (see onOpenMenu), not the player
-                    // live, which re-rendered all of it under the panel on every
-                    // frame anything in it moved (see [SnapshotBackdrop]). Let
-                    // go once the menu has played its way out. Drawn in this
-                    // sheet's own window, as the menu has to be to sit above
-                    // the player. Not under "reduce dynamic blur": the panel
-                    // is opaque then.
-                    val playerMenuUp = songActions != null && songMenuOrigin == null && menuFromPlayer
-                    LaunchedEffect(playerMenuUp, reduceDynamicBlur) {
-                        if (!playerMenuUp || reduceDynamicBlur) {
-                            delay(SNAPSHOT_RELEASE_DELAY_MS)
-                            playerBackdrop.release()
-                        }
-                    }
-                    Box(
-                        when {
-                            reduceDynamicBlur -> Modifier
-                            playerLiveCanvas -> Modifier.layerBackdrop(livePlayerBackdrop)
-                            else -> Modifier.snapshotBackdropSource(playerBackdrop)
-                        },
-                    ) {
-                        CompositionLocalProvider(LocalPlayerDock provides activeDock) {
-                            nowPlaying(playerSong)
-                        }
-                    }
+            }
+            LaunchedEffect(addSongsOpen) {
+                if (!addSongsOpen) return@LaunchedEffect
+                if (!reduceDynamicBlur && !playerLiveCanvas) playerBackdrop.capture()
+                viewModel.onQueryChange("")
+                addSongsPrevFilter = filter
+                viewModel.onFilterChange(SearchFilter.ALL)
+                addSongsSuggestions = null
+                val seed = player.song
+                if (seed == null) {
+                    addSongsSuggestions = emptyList()
+                    return@LaunchedEffect
+                }
+                loadAutoplayTracks(existing = player.queue, seedSong = seed, limit = 8)
+                    .onSuccess { addSongsSuggestions = it }
+                    .onFailure { addSongsSuggestions = emptyList() }
+            }
+            val playerMenuUp = (songActions != null && songMenuOrigin == null && menuFromPlayer) ||
+                addSongsOpen || songInfoTarget != null || addonLeftOutOfDownload != null
+            LaunchedEffect(playerMenuUp, reduceDynamicBlur) {
+                if (!playerMenuUp || reduceDynamicBlur) {
+                    delay(SNAPSHOT_RELEASE_DELAY_MS)
+                    playerBackdrop.release()
+                }
+            }
+            PlayerPanel(
+                dock = activeDock,
+                motion = playerSheetMotion.takeIf { !reducePlayerMotion },
+                song = playerSong,
+                isPlaying = player.isPlaying,
+                isLoading = playPauseBusy,
+                controlsLocked = controlsLocked,
+                onBlockedControl = showHostOnlyNotice,
+                onPlayPause = togglePlayPause,
+                onNext = { controller?.seekToNextMediaItem() },
+                onPrevious = { controller?.seekToPrevious() },
+                scrimAlpha = PLAYER_SCRIM_ALPHA,
+                onLaidOut = { size ->
+                    playerDock.sheetTravel = size.height.toFloat()
+                    playerSheetMotion.laidOut = true
+                },
+                overlay = {
                     IosMenuPopover(
                         item = songActions?.takeIf { songMenuOrigin == null && menuFromPlayer },
                         anchor = songMenuAnchor,
@@ -4816,6 +5576,45 @@ private fun MioriApp(
                         backdrop = if (playerLiveCanvas) livePlayerBackdrop else playerBackdrop,
                     ) { song ->
                         songMenuBody(song)
+                    }
+                    AddSongsDialog(
+                        open = addSongsOpen,
+                        query = query,
+                        onQueryChange = viewModel::onQueryChange,
+                        onSubmit = viewModel::submitSearch,
+                        results = results,
+                        typeahead = addSongsTypeahead,
+                        suggestions = addSongsSuggestions,
+                        filter = filter,
+                        onFilterChange = viewModel::onFilterChange,
+                        onLiveSearch = viewModel::searchQuiet,
+                        backdrop = if (playerLiveCanvas) livePlayerBackdrop else playerBackdrop,
+                        onAdd = { song -> addToQueue(song) },
+                        onDismiss = {
+                            AddSongsRequest.hide()
+                            viewModel.onQueryChange("")
+                            addSongsPrevFilter?.let { viewModel.onFilterChange(it) }
+                            addSongsPrevFilter = null
+                        },
+                    )
+                },
+            ) {
+                Box(
+                    when {
+                        reduceDynamicBlur -> Modifier
+                        // Snapshot diam tetap dipasang saat Canvas live, khusus untuk popover
+                        // di dalam player (globe / info antrean) agar frost-nya benar-benar blur.
+                        playerLiveCanvas -> Modifier
+                            .layerBackdrop(livePlayerBackdrop)
+                            .snapshotBackdropSource(playerBackdrop)
+                        else -> Modifier.snapshotBackdropSource(playerBackdrop)
+                    },
+                ) {
+                    CompositionLocalProvider(
+                        LocalPlayerDock provides activeDock,
+                        LocalPlayerMenuBackdrop provides playerBackdrop,
+                    ) {
+                        nowPlaying(playerSong)
                     }
                 }
             }
@@ -4837,6 +5636,7 @@ private fun MioriApp(
                         showReplayShare = true
                     },
                     paused = showReplayShare,
+                    mainPlayer = controller,
                 )
             }
         }
@@ -4879,9 +5679,27 @@ private fun MioriApp(
                 onDismiss = { songActions = null },
                 // Tapping the lifted track opens its album, as Apple Music's does.
                 onPreviewClick = { song ->
-                    song.albumId?.let { id ->
-                        songActions = null
-                        viewModel.openDetail(id, song.albumName ?: song.title, song.artist, song.thumbnailUrl, BrowseType.ALBUM)
+                    // Kartu yang ditekan langsung hilang, jadi menu harus selalu
+                    // ditutup di sini. Kalau tidak, hanya blur halaman yang tersisa.
+                    songActions = null
+                    val knownAlbumId = song.albumId
+                    if (knownAlbumId != null) {
+                        viewModel.openDetail(knownAlbumId, song.albumName ?: song.title, song.artist, song.thumbnailUrl, BrowseType.ALBUM)
+                    } else if (song.localUri == null && song.videoId.isNotBlank()) {
+                        // albumId belum diketahui: cari dulu, baru buka albumnya.
+                        scope.launch {
+                            val links = YtMusicRepository.trackLinks(song.videoId).getOrNull()
+                            val resolvedAlbumId = links?.albumId
+                            if (resolvedAlbumId != null) {
+                                viewModel.openDetail(
+                                    resolvedAlbumId,
+                                    song.albumName ?: links?.albumName ?: song.title,
+                                    song.artist,
+                                    song.thumbnailUrl,
+                                    BrowseType.ALBUM,
+                                )
+                            }
+                        }
                     }
                 },
             ) { song ->
@@ -4905,6 +5723,41 @@ private fun MioriApp(
             ) { song ->
                 songMenuBody(song)
             }
+            // Menu sumber pencarian dari globe di bar kaca: sibling layar penuh di atas
+            // bar (bukan anak Column bar), frost dari still halaman seperti menu ⋯ lain.
+            IosMenuPopover(
+                item = searchSourceMenu,
+                anchor = searchSourceMenu?.anchor,
+                onDismiss = { searchSourceMenu?.onDismiss?.invoke() },
+                // Without liquid glass the page's haze does the frosting, as in
+                // the other non-glass panels; a recorded still would draw nothing.
+                backdrop = if (glassActive) pageBackdrop else null,
+                hazeState = hazeState,
+                placement = IosMenuPlacement.AboveStart,
+                dimBackground = false,
+                glassRim = true,
+                frostAlpha = 0.45f,
+                compact = true,
+            ) { request ->
+                request.entries.forEach { entry ->
+                    IosMenuRow(
+                        compact = true,
+                        label = entry.label,
+                        icon = entry.icon,
+                        onClick = entry.onClick,
+                        enabled = entry.enabled,
+                        labelColor = if (entry.selected) MaterialTheme.colorScheme.primary else null,
+                        trailing = if (entry.selected) ({
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }) else null,
+                    )
+                }
+            }
             // A closed menu forgets where it was held and what it hung off, so
             // whatever opens it next starts from nothing.
             LaunchedEffect(songActions == null) {
@@ -4913,6 +5766,13 @@ private fun MioriApp(
                     songMenuAnchor = null
                     menuFromHistory = false
                 }
+            }
+        }
+
+        // ---- Song Info ----
+        songInfoTarget?.let { info ->
+            com.miori.music.ui.components.SongInfoDialog(info, backdrop = songInfoBackdrop) {
+                songInfoTarget = null
             }
         }
 
@@ -4926,8 +5786,23 @@ private fun MioriApp(
                 playlistTarget = null
                 creatingPlaylist = false
             }
+            // Playlists kept on this device (Spotify imports) sit in the same list.
+            val localChoices = remember(localPlaylists) {
+                localPlaylists.map { lp ->
+                    UserPlaylist(
+                        playlistId = lp.id,
+                        title = lp.title,
+                        subtitle = context.resources.getQuantityString(
+                            R.plurals.song_count_plural,
+                            lp.songs.size,
+                            lp.songs.size,
+                        ),
+                        thumbnailUrl = lp.coverUrl ?: lp.songs.firstNotNullOfOrNull { it.thumbnailUrl },
+                    )
+                }
+            }
             PlaylistPickerSheet(
-                playlists = playlists,
+                playlists = playlists + localChoices,
                 loading = playlistsLoading,
                 song = target,
                 startCreating = target == null,
@@ -4952,8 +5827,21 @@ private fun MioriApp(
                         }
                     }
                 },
-                onCreate = { title, privacy ->
-                    viewModel.createPlaylist(title, privacy, target)
+                onCreate = { title, privacy, cover ->
+                    viewModel.createPlaylist(title, privacy, target, cover) { created ->
+                        // Dibuat dari tab Library (bukan dari menu lagu): masuk ke
+                        // halaman playlist-nya dan langsung buka popup tambah lagu.
+                        if (target == null) {
+                            viewModel.openDetail(
+                                created.browseId,
+                                created.title,
+                                created.subtitle,
+                                created.thumbnailUrl,
+                                BrowseType.PLAYLIST,
+                            )
+                            addSongsPlaylist = created
+                        }
+                    }
                 },
             )
         }
@@ -5005,12 +5893,69 @@ private fun MioriApp(
                         )
                     }
                 },
-                onCreate = { title, _ ->
+                onCreate = { title, _, _ ->
                     OfflinePlaylists.create(title, listOfNotNull(target))
                     if (target != null) showQueueNotice(context.getString(R.string.song_added_to_playlist))
                 },
             )
         }
+
+        // ---- Tambah lagu ke playlist yang baru dibuat ----
+        // Popup yang sama dengan "Add Songs to Queue" di player, tapi hasil
+        // ketukannya masuk ke playlist. Query/hasil dipakai bersama tab Search,
+        // jadi dibersihkan saat dibuka dan ditutup.
+        val plAddTypeahead by viewModel.typeaheadResults.collectAsStateWithLifecycle()
+        var plAddSuggestions by remember { mutableStateOf<List<Song>?>(null) }
+        var plAddPrevFilter by remember { mutableStateOf<SearchFilter?>(null) }
+        val plAddOpen = addSongsPlaylist != null
+        val closeAddSongs: () -> Unit = {
+            if (addSongsPlaylist != null) {
+                addSongsPlaylist = null
+                viewModel.onQueryChange("")
+                plAddPrevFilter?.let { viewModel.onFilterChange(it) }
+                plAddPrevFilter = null
+            }
+        }
+        LaunchedEffect(plAddOpen) {
+            if (!plAddOpen) return@LaunchedEffect
+            viewModel.onQueryChange("")
+            plAddPrevFilter = filter
+            viewModel.onFilterChange(SearchFilter.ALL)
+            plAddSuggestions = null
+            val seed = player.song
+            if (seed == null) {
+                plAddSuggestions = emptyList()
+                return@LaunchedEffect
+            }
+            loadAutoplayTracks(existing = player.queue, seedSong = seed, limit = 8)
+                .onSuccess { plAddSuggestions = it }
+                .onFailure { plAddSuggestions = emptyList() }
+        }
+        AddSongsDialog(
+            open = plAddOpen,
+            title = stringResource(R.string.add_songs_to_playlist),
+            query = query,
+            onQueryChange = viewModel::onQueryChange,
+            onSubmit = viewModel::submitSearch,
+            results = results,
+            typeahead = plAddTypeahead,
+            suggestions = plAddSuggestions,
+            filter = filter,
+            onFilterChange = viewModel::onFilterChange,
+            onLiveSearch = viewModel::searchQuiet,
+            backdrop = null,
+            hazeState = hazeState,
+            onAdd = { song ->
+                addSongsPlaylist?.let { pl ->
+                    viewModel.addToPlaylists(listOf(pl), song) { added, alreadyThere, failed ->
+                        if (added == 0 && alreadyThere == 0 && failed > 0) {
+                            showQueueNotice(context.getString(R.string.failed))
+                        }
+                    }
+                }
+            },
+            onDismiss = closeAddSongs,
+        )
 
         if (showSpotifyImportDialog) {
             BackHandler { showSpotifyImportDialog = false }
@@ -5095,11 +6040,22 @@ private fun MioriApp(
             // One of the offline player's own playlists, which are the user's
             // to rename and delete — all but Liked, which is the app's.
             val offlineEditable = OfflinePlaylists.get(target.browseId)?.takeUnless { it.isLiked }
+            // A Spotify import kept on this device: the user's own to rename,
+            // re-cover and delete. Read off the collected list so the sheet
+            // follows each edit.
+            val localEditable = target.browseId?.let { id -> localPlaylists.firstOrNull { it.browseId == id } }
             BrowseActionsMenu(
                 // The live answer, not the one the target was built with.
                 target = target.copy(
                     playlist = playlist ?: offlineEditable?.let {
                         UserPlaylist(playlistId = it.id, title = it.title, subtitle = "", thumbnailUrl = null)
+                    } ?: localEditable?.let {
+                        UserPlaylist(
+                            playlistId = it.id,
+                            title = it.title,
+                            subtitle = "",
+                            thumbnailUrl = it.coverUrl ?: it.songs.firstNotNullOfOrNull { s -> s.thumbnailUrl },
+                        )
                     },
                 ),
                 onRenameInSheet = {
@@ -5180,7 +6136,15 @@ private fun MioriApp(
                 isPinned = pinnableId != null && pinnableId in pinnedPlaylists,
                 onTogglePin = pinnableId?.let { id ->
                     {
-                        val nowPinned = AppSettings.togglePinnedPlaylist(id)
+                        val nowPinned = AppSettings.togglePinnedPlaylist(
+                            id,
+                            // A Spotify page lives in no Library shelf, so its pin carries its own card.
+                            if (id.startsWith(SPOTIFY_PAGE_PREFIX)) {
+                                AppSettings.PinnedCard(target.title, target.subtitle, target.thumbnailUrl)
+                            } else {
+                                null
+                            },
+                        )
                         if (!nowPinned && id !in pinnedPlaylists) {
                             Toast.makeText(
                                 context,
@@ -5205,6 +6169,17 @@ private fun MioriApp(
                         OfflinePlaylists.rename(p.browseId, name)
                         viewModel.retitleDetail(p.browseId, name.trim())
                     }
+                } ?: localEditable?.let { p ->
+                    { name: String ->
+                        browseActions = null
+                        com.miori.music.data.spotify.LocalPlaylistStore.renamePlaylist(p.browseId, name.trim())
+                        viewModel.retitleDetail(p.browseId, name.trim())
+                    }
+                },
+                onChangeCover = playlist?.let { p ->
+                    { uri: android.net.Uri? -> viewModel.setPlaylistCover(p, uri) }
+                } ?: localEditable?.let { p ->
+                    { uri: android.net.Uri? -> viewModel.setLocalPlaylistCover(p.browseId, uri) }
                 },
                 onReorder = playlist?.let { p ->
                     {
@@ -5232,6 +6207,28 @@ private fun MioriApp(
                             )
                         }
                     }
+                } ?: localEditable?.let { p ->
+                    {
+                        browseActions = null
+                        if (detail?.browseId != p.browseId) {
+                            viewModel.openDetail(
+                                browseId = p.browseId,
+                                title = p.title,
+                                subtitle = "",
+                                thumbnailUrl = p.coverUrl ?: p.songs.firstNotNullOfOrNull { s -> s.thumbnailUrl },
+                                type = BrowseType.PLAYLIST,
+                            )
+                        }
+                        detailSearching = false
+                        reorderTarget = UserPlaylist(
+                            playlistId = p.browseId,
+                            title = p.title,
+                            subtitle = "",
+                            thumbnailUrl = p.coverUrl,
+                        )
+                        reorderSaving = false
+                        reorderEntries = UiState.Success(p.songs)
+                    }
                 },
                 onDelete = playlist?.let { p ->
                     {
@@ -5244,6 +6241,14 @@ private fun MioriApp(
                         // Its page has nothing left to show; take it away too.
                         if (detail?.browseId == p.browseId) viewModel.closeDetail()
                         OfflinePlaylists.delete(p.browseId)
+                    }
+                } ?: localEditable?.let { p ->
+                    {
+                        browseActions = null
+                        if (detail?.browseId == p.browseId) viewModel.closeDetail()
+                        com.miori.music.data.PlaylistCovers.remove(context, p.browseId)
+                        if (p.browseId in pinnedPlaylists) AppSettings.togglePinnedPlaylist(p.browseId)
+                        com.miori.music.data.spotify.LocalPlaylistStore.deletePlaylist(p.browseId)
                     }
                 },
                 onDeleteDownload = target.downloadId?.let { id ->
@@ -5262,6 +6267,10 @@ private fun MioriApp(
             browseActions?.takeIf { browseRenameInSheet }?.let { target ->
                 ModalBottomSheet(
                     onDismissRequest = { browseActions = null },
+                    // Langsung tinggi penuh. Setengah terbuka, sheet berhenti di
+                    // tengah layar dan bagian bawahnya (kolom nama + Save) berada
+                    // di balik keyboard, tidak terjangkau oleh scroll form.
+                    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
                     containerColor = MaterialTheme.colorScheme.background,
                 ) {
                     browseMenuBody(target)
@@ -5275,10 +6284,13 @@ private fun MioriApp(
                 // Tapping the lifted card opens it, as a tap on it in the list
                 // would have. Not for a Local Music grouping, which has no page.
                 onPreviewClick = { target ->
-                    target.browseId?.let { id ->
-                        browseActions = null
+                    val targetId = target.browseId
+                    if (targetId != null) startCoverFlightFor(targetId)
+                    // Selalu ditutup, juga untuk item tanpa halaman (Local Music).
+                    browseActions = null
+                    if (targetId != null) {
                         viewModel.openDetail(
-                            browseId = id,
+                            browseId = targetId,
                             title = target.title,
                             subtitle = target.subtitle,
                             thumbnailUrl = target.thumbnailUrl,
@@ -5421,27 +6433,14 @@ private fun MioriApp(
             }
         }
 
-        // ---- Diwali greeting ----
-        AnimatedVisibility(
-            visible = showDiwali,
-            enter = fadeIn(tween(400)),
-            exit = fadeOut(tween(300)),
-        ) {
-            val dismissDiwali = {
-                showDiwali = false
-                AppSettings.setDiwaliGreetingShown()
-            }
-            BackHandler(onBack = dismissDiwali)
-            DiwaliGreetingScreen(onDismiss = dismissDiwali)
-        }
-
-        // ---- Update available (once per launch; held until the welcome and Diwali greeting are done) ----
-        if (showUpdateDialog && onboardingComplete && !showDiwali) {
+        // ---- Update available (once per launch; held until the welcome is done) ----
+        if ((showUpdateDialog || updateForced) && onboardingComplete) {
             updateNotice?.let { update ->
                 UpdateAvailableDialog(
                     version = update.version,
                     notes = update.notes,
                     hazeState = hazeState,
+                    mandatory = updateForced,
                     // A download in progress keeps running behind the closed
                     // sheet — only the sheet itself goes away. The top bar's
                     // update icon reopens it onto whatever state it reached.
@@ -5478,7 +6477,15 @@ private fun MioriApp(
             )
         }
 
-        if (songSortMenuOpen) {
+        if (showCanvasProviders) {
+            BackHandler { showCanvasProviders = false }
+            CanvasProvidersDialog(
+                hazeState = hazeState,
+                onDismiss = { showCanvasProviders = false },
+            )
+        }
+
+        PopMenuHost(songSortMenuOpen) {
             BackHandler { songSortMenuOpen = false }
             FrostedSortMenu(
                 hazeState = hazeState,
@@ -5505,8 +6512,25 @@ private fun MioriApp(
             )
         }
 
+        PopMenuHost(librarySortMenuOpen) {
+            BackHandler { librarySortMenuOpen = false }
+            FrostedMenuPanel(hazeState = hazeState, onDismiss = { librarySortMenuOpen = false }) {
+                LibrarySort.entries.forEach { option ->
+                    FrostedMenuRow(
+                        label = option.localizedLabel(),
+                        checked = option == librarySort,
+                        onClick = {
+                            AppSettings.setLibrarySort(option)
+                            librarySortMenuOpen = false
+                        },
+                    )
+                }
+            }
+        }
+
         val menuFolder = detail?.browseId?.takeIf { it.isDeviceFolder() }
-        if (folderMenuOpen && menuFolder != null) {
+        PopMenuHost(folderMenuOpen && menuFolder != null) {
+            if (menuFolder == null) return@PopMenuHost
             BackHandler { folderMenuOpen = false }
             val downloadsFolder = menuFolder == "local:downloads"
             val viewType = folderViewTypeOf(menuFolder)
@@ -5529,6 +6553,9 @@ private fun MioriApp(
             )
         }
 
+        LaunchedEffect(showAccountSelector) {
+            if (!showAccountSelector) accountSelectorLeaving = false
+        }
         if (showAccountSelector) {
             BackHandler { showAccountSelector = false }
             AccountProfileSelector(
@@ -5550,6 +6577,7 @@ private fun MioriApp(
                     navigator.push(AppRoute.Settings)
                 },
                 onDismiss = { showAccountSelector = false },
+                onClosing = { accountSelectorLeaving = true },
             )
         }
 
@@ -5558,6 +6586,21 @@ private fun MioriApp(
             AppLanguageDialog(
                 hazeState = hazeState,
                 onDismiss = { showAppLanguage = false },
+            )
+        }
+
+        if (showHomeLayout) {
+            BackHandler { showHomeLayout = false }
+            // Recents stays in this list while it is hidden, so it can be shown again.
+            val layoutShelves = remember(homeState, hideHomeVideos) {
+                val loaded = (homeState as? UiState.Success)?.data.orEmpty()
+                if (hideHomeVideos) loaded.withoutVideos() else loaded
+            }
+            HomeLayoutDialog(
+                hazeState = hazeState,
+                shelves = layoutShelves,
+                libraryShelves = (libraryState as? UiState.Success)?.data?.shelves.orEmpty(),
+                onDismiss = { showHomeLayout = false },
             )
         }
 
@@ -5867,35 +6910,6 @@ private fun MioriApp(
             )
         }
 
-        choosingSourceQuality?.let { config ->
-            ChoiceAlert(
-                hazeState = hazeState,
-                title = stringResource(R.string.audio_quality),
-                message = null,
-                options = config.qualityOptions,
-                selected = config.activeQuality,
-                label = { it?.label.orEmpty() },
-                onSelect = { option ->
-                    // Off the stored config, not the one this list opened with:
-                    // a probe may have refreshed it since.
-                    SourceRegistry.config(config.id)?.let {
-                        SourceRegistry.update(it.copy(pickedQuality = option?.value))
-                    }
-                    choosingSourceQuality = null
-                },
-                onDismiss = { choosingSourceQuality = null },
-            )
-        }
-
-        explainingOutdatedAddon?.let { config ->
-            InfoAlert(
-                hazeState = hazeState,
-                title = config.displayName,
-                description = stringResource(R.string.source_needs_update),
-                onDismiss = { explainingOutdatedAddon = null },
-            )
-        }
-
         if (confirmJioSaavn) {
             ConfirmationAlert(
                 hazeState = hazeState,
@@ -5952,6 +6966,20 @@ private fun MioriApp(
         }
 
         addonLeftOutOfDownload?.let { (addon, why) ->
+            // Dibuka dari player: kacanya harus melihat player, bukan halaman
+            // utama di bawahnya yang tertutup player.
+            val appBackdrop = LocalAppBackdrop.current
+            val alertBackdrop = if (playerRaised && !reduceDynamicBlur) {
+                if (playerLiveCanvas) livePlayerBackdrop else playerBackdrop
+            } else {
+                appBackdrop
+            }
+            LaunchedEffect(Unit) {
+                if (playerRaised && !reduceDynamicBlur && !playerLiveCanvas && !playerBackdrop.hasStill) {
+                    playerBackdrop.capture()
+                }
+            }
+            CompositionLocalProvider(LocalAppBackdrop provides alertBackdrop) {
             InfoAlert(
                 hazeState = hazeState,
                 title = stringResource(R.string.download_addon_left_out_title, addon),
@@ -5967,6 +6995,7 @@ private fun MioriApp(
                 // here, the alert opened behind whichever it was.
                 inOwnWindow = playerRaised || songActions != null || browseActions != null,
             )
+            }
         }
 
     }
@@ -5990,6 +7019,28 @@ private fun LibrarySort.localizedLabel(): String = when (this) {
     LibrarySort.DEFAULT -> stringResource(R.string.sort_default)
     LibrarySort.TITLE_ASC -> stringResource(R.string.sort_title_ascending)
     LibrarySort.TITLE_DESC -> stringResource(R.string.sort_title_descending)
+}
+
+/**
+ * Folds a top bar action in and out. A top-level wrapper on purpose: called from
+ * inside the bar's Row it would resolve to RowScope.AnimatedVisibility, which the
+ * compiler rejects from that nested scope.
+ */
+@Composable
+private fun ActionReveal(visible: Boolean, bounce: Boolean = false, content: @Composable () -> Unit) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = if (bounce) {
+            fadeIn(tween(200)) +
+                expandHorizontally(spring(dampingRatio = 1f, stiffness = 400f)) +
+                scaleIn(spring(dampingRatio = 0.7f, stiffness = 400f), initialScale = 0.7f)
+        } else {
+            fadeIn(tween(200)) + expandHorizontally(spring(dampingRatio = 1f, stiffness = 400f))
+        },
+        exit = fadeOut(tween(140)) + shrinkHorizontally(spring(dampingRatio = 1f, stiffness = 400f)),
+    ) {
+        content()
+    }
 }
 
 /**
@@ -6023,9 +7074,10 @@ private fun FrostedSortMenu(
         Row(
             Modifier
                 .fillMaxWidth()
+                .padding(horizontal = 8.dp)
+                .jellyMenuRow(onClick = onFlipDateDirection)
                 .heightIn(min = 48.dp)
-                .clickable(role = Role.Button) { onFlipDateDirection() }
-                .padding(horizontal = 20.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -6090,6 +7142,34 @@ private fun FrostedFolderMenu(
     }
 }
 
+/** 0 to 1 as a menu pops in and back to 0 as it folds away; 1 where nothing animates it. */
+private val LocalMenuPop = androidx.compose.runtime.staticCompositionLocalOf<() -> Float> { { 1f } }
+
+/**
+ * Keeps a menu composed while it plays its way out. A bare `if (open) Menu()`
+ * removes it the instant the flag drops, so there is never a frame left to
+ * animate. The pop is a spring that overshoots a little on the way in and a
+ * short ease on the way out; the panel reads it through [LocalMenuPop] at draw
+ * time, so a frame of it is a redraw and not a recomposition.
+ */
+@Composable
+private fun PopMenuHost(visible: Boolean, content: @Composable () -> Unit) {
+    val progress = remember { androidx.compose.animation.core.Animatable(0f) }
+    var present by remember { mutableStateOf(visible) }
+    LaunchedEffect(visible) {
+        if (visible) {
+            present = true
+            progress.animateTo(1f, com.miori.music.ui.components.MacOSPopupSpec().openSpring)
+        } else {
+            progress.animateTo(0f, com.miori.music.ui.components.MacOSPopupSpec().closeSpring)
+            present = false
+        }
+    }
+    if (present) {
+        CompositionLocalProvider(LocalMenuPop provides { progress.value }) { content() }
+    }
+}
+
 /** The scrim and frosted panel both top-bar menus are drawn on. */
 @OptIn(ExperimentalHazeMaterialsApi::class)
 @Composable
@@ -6100,19 +7180,31 @@ private fun FrostedMenuPanel(
 ) {
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val shape = MaterialTheme.shapes.extraLarge
+    val touch = rememberJellyMenuTouch()
+    val pop = LocalMenuPop.current
     Box(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.scrim.copy(alpha = .48f))
             .clickable(onClick = onDismiss),
         contentAlignment = Alignment.TopEnd,
     ) {
+        // The scrim fades with the pop rather than cutting in and out.
+        Box(
+            Modifier
+                .matchParentSize()
+                .graphicsLayer { alpha = pop().coerceIn(0f, 1f) }
+                .background(MaterialTheme.colorScheme.scrim.copy(alpha = .48f)),
+        )
         Surface(
             color = Color.Transparent,
             contentColor = MaterialTheme.colorScheme.onSurface,
             shape = shape,
             modifier = Modifier
                 .padding(top = 56.dp, end = 20.dp)
+                // Grows out of the button that opened it, like the alerts do,
+                // and folds back into it on the way out.
+                .macOSPopupMorph(progress = pop, cornerRadius = 28.dp)
+                .iosMenuJelly(touch, 1f, 0f)
                 .width(IntrinsicSize.Max)
                 .clip(shape)
                 .then(
@@ -6127,7 +7219,7 @@ private fun FrostedMenuPanel(
                 )
                 .clickable(onClick = {}),
         ) {
-            Column(Modifier.padding(vertical = 8.dp), content = content)
+            JellyMenuBody(touch, content = content)
         }
     }
 }
@@ -6143,9 +7235,10 @@ private fun FrostedMenuRow(
     Row(
         Modifier
             .fillMaxWidth()
+            .padding(horizontal = 8.dp)
+            .jellyMenuRow(onClick = onClick)
             .heightIn(min = 44.dp)
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -6261,24 +7354,11 @@ private const val PLAYER_SCRIM_ALPHA = 0.32f
 @Composable
 private fun Isolated(content: @Composable () -> Unit) = content()
 
+/** Backdrop player (still, atau live saat Canvas) untuk popover di dalam player selain menu ⋯. */
+private val LocalPlayerMenuBackdrop = staticCompositionLocalOf<Backdrop?> { null }
+
 /** Longer than the ⋯ menu's exit, so its panel keeps its frost on the way out. */
 private const val SNAPSHOT_RELEASE_DELAY_MS = 400L
-
-/**
- * The player sheet's shape: square, as [RectangleShape] was, but reaching a
- * whole sheet's height above the sheet's top edge.
- *
- * The sheet's Surface clips its content to this shape, and on the way down to
- * the mini player the artwork travels ahead of the sheet carrying it — up
- * above the sheet's top edge, where a plain rectangle cut it off mid-air,
- * leaving only its lower part to arrive in the bar. Nothing else is drawn
- * outside the sheet (its background is transparent and it casts no shadow),
- * so at rest this is the rectangle it replaces.
- */
-private object PlayerSheetShape : Shape {
-    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
-        Outline.Rectangle(Rect(0f, -size.height, size.width, size.height))
-}
 
 private const val TAB_HOME = 0
 private const val TAB_EXPLORE = 1

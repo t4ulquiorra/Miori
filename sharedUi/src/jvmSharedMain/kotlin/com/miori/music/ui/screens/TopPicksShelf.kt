@@ -3,6 +3,7 @@ package com.miori.music.ui.screens
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -22,7 +23,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
@@ -34,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.compositionLocalOf
@@ -51,16 +52,26 @@ import kotlinx.coroutines.flow.first
 import com.miori.music.data.canvas.CanvasArtwork
 import com.miori.music.ui.AppUi
 import com.miori.music.ui.player.CanvasArtworkPlayer
+import com.miori.music.ui.player.CanvasFrameGrab
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.BlendMode
 import com.miori.music.ui.components.libraryGrid
@@ -73,7 +84,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import com.miori.music.ui.components.SHELF_CARD_WIDTH
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.clickable
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -91,6 +101,8 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -100,6 +112,7 @@ import coil3.compose.AsyncImage
 import com.miori.music.data.model.CARD_ART_PX
 import com.miori.music.data.model.HEADER_ART_PX
 import com.miori.music.data.model.TopPick
+import com.miori.music.data.model.MOST_PLAYED_BROWSE_ID
 import com.miori.music.data.model.TopPickKind
 import com.miori.music.data.model.TopPickMood
 import com.miori.music.data.model.artworkAt
@@ -107,12 +120,17 @@ import com.miori.music.sharedui.resources.*
 import com.miori.music.ui.components.PAGE_GUTTER
 import com.miori.music.ui.components.rememberBlurredBackdrop
 import com.miori.music.ui.components.ShelfRow
+import com.miori.music.ui.components.shelfStagger
+import com.miori.music.ui.components.instantPressClickable
 import com.miori.music.ui.components.SectionHeaderSkeleton
 import com.miori.music.ui.components.ShimmerBox
 import com.miori.music.ui.components.contextClick
 import com.miori.music.ui.components.longPressMenuClickable
 import com.miori.music.ui.components.thumbnailBorder
-import org.jetbrains.compose.resources.painterResource
+import com.miori.music.ui.components.coverFlightSource
+import com.miori.music.ui.components.hideDuringCoverFlight
+import com.miori.music.ui.components.revealAfterCoverLanding
+import com.miori.music.ui.components.rememberCoverFlightTap
 import org.jetbrains.compose.resources.stringResource
 import kotlin.math.PI
 import kotlin.math.abs
@@ -130,16 +148,24 @@ import kotlin.math.sin
  * card leaves composition.
  */
 
+/**
+ * Draws the Liked Music mosaic from the given covers, for the Most Played card.
+ * The phone app supplies it, since that artwork lives there; null falls back to a gradient.
+ */
+val LocalMostPlayedArt = staticCompositionLocalOf<(@Composable (List<String>, Boolean, Modifier) -> Unit)?> { null }
+
 /** Width over height: Apple's cards are a 3:4 portrait. */
 private const val TOP_PICK_RATIO = 0.75f
 
 /** Share of the row a card takes, so the next one shows past it. */
 private const val TOP_PICK_FRACTION = 0.60f
 
-/** Held back on a tablet, so a card doesn't blow up into a poster. */
+/** Held back on a tablet, the same way [heroCardWidth] is. */
 private val TOP_PICK_MAX_WIDTH = 280.dp
 
-private val TopPickShape = RoundedCornerShape(12.dp)
+private val TopPickCorner = 12.dp
+
+private val TopPickShape = RoundedCornerShape(TopPickCorner)
 
 private fun topPickWidth(available: Dp): Dp = minOf(available * TOP_PICK_FRACTION, TOP_PICK_MAX_WIDTH)
 
@@ -152,7 +178,7 @@ internal fun TopPicksShelf(
     onClick: (TopPick, String) -> Unit,
     onLongPress: ((TopPick) -> Unit)?,
 ) {
-    val rowState = rememberLazyListState()
+    val rowState = rememberShelfListState("top-picks")
     // Which cards turned out to have a clip, by index, and which one plays.
     val hasClip = remember(picks) { mutableStateMapOf<Int, Boolean>() }
     var owner by remember(picks) { mutableIntStateOf(-1) }
@@ -179,13 +205,15 @@ internal fun TopPicksShelf(
                                 onClipFound = { found -> hasClip[index] = found },
                             ),
                         ) {
-                            TopPickCard(
-                                pick = pick,
-                                listenerName = listenerName,
-                                onClick = onClick,
-                                onLongPress = onLongPress?.takeIf { pick.kind == TopPickKind.LATEST_RELEASE },
-                                modifier = Modifier.width(cardWidth),
-                            )
+                            Box(Modifier.shelfStagger(index).width(cardWidth)) {
+                                TopPickCard(
+                                    pick = pick,
+                                    listenerName = listenerName,
+                                    onClick = onClick,
+                                    onLongPress = onLongPress?.takeIf { pick.kind == TopPickKind.LATEST_RELEASE },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
                         }
                     }
                 }
@@ -207,10 +235,12 @@ fun LazyListScope.topPicksSkeleton() {
                     userScrollEnabled = false,
                 ) {
                     items(2) {
-                        ShimmerBox(
-                            modifier = Modifier.width(cardWidth).aspectRatio(TOP_PICK_RATIO),
-                            shape = TopPickShape,
-                        )
+                        Box(Modifier.width(cardWidth)) {
+                            ShimmerBox(
+                                modifier = Modifier.fillMaxWidth().aspectRatio(TOP_PICK_RATIO),
+                                shape = TopPickShape,
+                            )
+                        }
                     }
                 }
             }
@@ -218,8 +248,30 @@ fun LazyListScope.topPicksSkeleton() {
     }
 }
 
+/** The small grey label above a card, as Apple Music has it. */
+@Composable
+private fun topPickLabel(pick: TopPick): String = when (pick.kind) {
+    TopPickKind.LATEST_RELEASE -> stringResource(Res.string.top_pick_label_new_release)
+    TopPickKind.FEATURED_ARTIST,
+    TopPickKind.ARTIST_AND_SIMILAR,
+    -> stringResource(Res.string.top_pick_label_listen_again)
+    TopPickKind.PERSONAL_STATION -> stringResource(Res.string.top_pick_made_for_you)
+    TopPickKind.MOOD -> stringResource(Res.string.top_pick_label_mood)
+    TopPickKind.NEW_RELEASE_MIX -> stringResource(Res.string.top_pick_label_fresh)
+    TopPickKind.DISCOVERY_STATION -> stringResource(Res.string.top_pick_label_discover)
+    TopPickKind.MOST_PLAYED -> stringResource(Res.string.top_pick_label_most_played)
+    TopPickKind.MADE_FOR_YOU_MIX -> stringResource(Res.string.top_pick_label_mix)
+}
+
 /** What a card says: the small coloured line, the title, and an optional line under it. */
 private class CardText(val eyebrow: String, val title: String, val subtitle: String)
+
+/** Whether two cards would show the same small label above them. */
+private fun sharesTopPickLabel(a: TopPick, b: TopPick): Boolean {
+    fun isArtist(kind: TopPickKind) =
+        kind == TopPickKind.FEATURED_ARTIST || kind == TopPickKind.ARTIST_AND_SIMILAR
+    return a.kind == b.kind || (isArtist(a.kind) && isArtist(b.kind))
+}
 
 @Composable
 private fun cardText(pick: TopPick, listenerName: String?): CardText {
@@ -231,7 +283,7 @@ private fun cardText(pick: TopPick, listenerName: String?): CardText {
             subtitle = localizeCardSubtitle(pick.subtitle),
         )
         TopPickKind.PERSONAL_STATION -> CardText(
-            eyebrow = stringResource(Res.string.top_pick_made_for_you),
+            eyebrow = stringResource(Res.string.top_pick_based_on_listening),
             title = listenerName?.substringBefore(' ')?.takeIf { it.isNotBlank() }
                 ?.let { stringResource(Res.string.top_pick_named_station, it) }
                 ?: stringResource(Res.string.top_pick_your_station),
@@ -256,18 +308,23 @@ private fun cardText(pick: TopPick, listenerName: String?): CardText {
             subtitle = pick.subtitle,
         )
         TopPickKind.NEW_RELEASE_MIX -> CardText(
-            eyebrow = stringResource(Res.string.top_pick_made_for_you),
+            eyebrow = stringResource(Res.string.top_pick_just_dropped),
             title = pick.title,
             subtitle = pick.subtitle,
         )
         TopPickKind.DISCOVERY_STATION -> CardText(
-            eyebrow = stringResource(Res.string.top_pick_made_for_you),
+            eyebrow = stringResource(Res.string.top_pick_new_to_you),
             title = stringResource(Res.string.top_pick_discovery_station),
             subtitle = "",
         )
         TopPickKind.MADE_FOR_YOU_MIX -> CardText(
             eyebrow = "",
             title = pick.title,
+            subtitle = pick.subtitle,
+        )
+        TopPickKind.MOST_PLAYED -> CardText(
+            eyebrow = stringResource(Res.string.top_pick_most_played_eyebrow),
+            title = stringResource(Res.string.top_pick_most_played_title),
             subtitle = pick.subtitle,
         )
     }
@@ -284,13 +341,66 @@ private fun TopPickCard(
 ) {
     val text = cardText(pick, listenerName)
     val longPress = onLongPress?.let { { it(pick) } }
+    val coverToken = remember { Any() }
+    // Dari warna tema aplikasi, bukan sistem, supaya ikut pilihan tema di dalam app.
+    val darkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    // The clip this card is playing, handed to the cover flight so it flies too.
+    var flightCanvas by remember { mutableStateOf<CanvasArtwork?>(null) }
+    // Reads the frame the clip is showing, at the moment of the tap.
+    val frameGrab = remember { CanvasFrameGrab() }
+    // Same page id Home opens for this card, so the flight finds the page's cover.
+    val flightId: String? = when (pick.kind) {
+        TopPickKind.LATEST_RELEASE -> pick.browseId
+        TopPickKind.MOST_PLAYED ->
+            MOST_PLAYED_BROWSE_ID.takeIf { pick.images.isNotEmpty() && LocalArtworkImages.current }
+        TopPickKind.FEATURED_ARTIST -> pick.artistBrowseId
+        TopPickKind.MADE_FOR_YOU_MIX -> pick.mixPageId
+        TopPickKind.NEW_RELEASE_MIX ->
+            pick.watch?.playlistId
+                ?.takeIf { it.isNotBlank() && !it.startsWith("RDAMVM") }
+                ?.let { if (it.startsWith("VL")) it else "VL$it" }
+        else -> null
+    }
+    val openCard = rememberCoverFlightTap(
+        browseId = flightId,
+        token = coverToken,
+        action = { onClick(pick, text.title) },
+        grabFrame = { frameGrab.grab?.invoke() },
+    )
+    // Tidak ada shrink/scale pada kartu saat ditekan (fixed geometry).
+    val recapPress = Modifier
     Box(
         modifier = modifier
+            .then(recapPress)
             .aspectRatio(TOP_PICK_RATIO)
             .clip(TopPickShape)
-            .thumbnailBorder(TopPickShape)
+            // Mode gelap: satu garis tipis saja. Dua border putih yang bertumpuk
+            // tampak seperti bingkai abu-abu terang di atas latar hitam.
+            .then(if (darkSurface) Modifier else Modifier.thumbnailBorder(TopPickShape))
+            .border(
+                width = 0.75.dp,
+                brush = Brush.verticalGradient(
+                    if (darkSurface) {
+                        listOf(
+                            Color.White.copy(alpha = 0.14f),
+                            Color.White.copy(alpha = 0.02f),
+                            Color.White.copy(alpha = 0.06f),
+                        )
+                    } else {
+                        listOf(
+                            Color.White.copy(alpha = 0.38f),
+                            Color.White.copy(alpha = 0.04f),
+                            Color.White.copy(alpha = 0.14f),
+                        )
+                    },
+                ),
+                shape = TopPickShape,
+            )
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .longPressMenuClickable(onClick = { onClick(pick, text.title) }, onLongClick = longPress)
+            .longPressMenuClickable(
+                onClick = openCard,
+                onLongClick = longPress,
+            )
             .contextClick(longPress),
     ) {
         val eyebrowColor: Color
@@ -300,6 +410,55 @@ private fun TopPickCard(
                 PersonalStationArt(Modifier.fillMaxSize())
                 eyebrowColor = Color(0xFFFFD2DA)
                 branded = true
+            }
+            TopPickKind.MOST_PLAYED -> {
+                val art = LocalMostPlayedArt.current
+                val covers = if (LocalArtworkImages.current) pick.images else emptyList()
+                val motion = LocalArtworkMotion.current
+                if (art != null && covers.isNotEmpty() && flightId != null) {
+                    // Mosaic persegi di atas, kakinya memudar ke blur; mosaic inilah
+                    // yang terbang (tetap bergerak) ke sleeve halamannya.
+                    MostPlayedCardArt(
+                        modifier = Modifier.fillMaxSize(),
+                        coverModifier = Modifier.coverFlightSource(
+                            coverToken,
+                            null,
+                            TopPickCorner,
+                            footFade = true,
+                            // Cover terbang selalu bergerak, walau kartunya sendiri
+                            // sedang di-pause karena Home tertutup.
+                            content = { m -> art(covers, true, m) },
+                        ),
+                        art = { m -> art(covers, motion, m) },
+                    )
+                } else if (art != null) {
+                    art(covers, motion, Modifier.fillMaxSize())
+                } else {
+                    Box(
+                        Modifier.fillMaxSize().background(
+                            Brush.linearGradient(listOf(Color(0xFF9B6CFF), Color(0xFFFF7AB8))),
+                        ),
+                    )
+                }
+                eyebrowColor = Color(0xFFE9DCFF)
+                branded = true
+            }
+            TopPickKind.MADE_FOR_YOU_MIX -> {
+                // Blob cairan inilah yang terbang ke sleeve halaman mix.
+                MixFluidArt(
+                    pick.title,
+                    Modifier
+                        .fillMaxSize()
+                        .coverFlightSource(
+                            coverToken,
+                            null,
+                            TopPickCorner,
+                            content = { m -> MixFluidArt(pick.title, m) },
+                        ),
+                )
+                eyebrowColor = Color.White
+                // Teksnya digambar MixCoverOverlay di bawah; tanpa glow dan band gelap.
+                branded = false
             }
             TopPickKind.DISCOVERY_STATION -> {
                 DiscoveryStationArt(Modifier.fillMaxSize())
@@ -322,6 +481,21 @@ private fun TopPickCard(
                 ReleaseArt(
                     pick.images.firstOrNull(),
                     Modifier.fillMaxSize(),
+                    // Only the square cover flies, not the whole card around it.
+                    coverModifier = if (flightId != null) {
+                        Modifier.coverFlightSource(
+                            coverToken,
+                            pick.images.firstOrNull().croppedAt(HEADER_ART_PX).whenArtworkReady(),
+                            TopPickCorner,
+                            footFade = true,
+                            canvas = flightCanvas,
+                        )
+                    } else {
+                        Modifier
+                    },
+                    coverHide = Modifier.hideDuringCoverFlight(coverToken),
+                    onClip = { flightCanvas = it },
+                    frameGrab = frameGrab,
                     // A New Release Mix is a playlist; only a real release has a sleeve that moves.
                     motion = pick.takeIf { it.kind == TopPickKind.LATEST_RELEASE }?.let { release ->
                         CardMotionSource(release.browseId ?: release.title) {
@@ -333,18 +507,29 @@ private fun TopPickCard(
                 branded = false
             }
             TopPickKind.FEATURED_ARTIST -> {
+                val artistPhoto = pick.images.firstOrNull()
+                    .croppedAt(HEADER_ART_PX * 3 / 4, HEADER_ART_PX)
+                    .whenArtworkReady()
                 AsyncImage(
-                    model = pick.images.firstOrNull().croppedAt(HEADER_ART_PX * 3 / 4, HEADER_ART_PX).whenArtworkReady(),
+                    model = artistPhoto,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .coverFlightSource(coverToken, artistPhoto, TopPickCorner, canvas = flightCanvas)
+                        .fillMaxSize(),
                 )
-                CardMotion(pick.artistMotion(), Modifier.fillMaxSize())
+                CardMotion(
+                    pick.artistMotion(),
+                    Modifier.fillMaxSize().hideDuringCoverFlight(coverToken),
+                    onCanvas = { flightCanvas = it },
+                    frameGrab = frameGrab,
+                )
                 // The caption sits on the picture's own darkened foot, as on
                 // Apple's photo cards, rather than on a band of flat black.
                 Box(
                     Modifier
                         .fillMaxSize()
+                        .hideDuringCoverFlight(coverToken)
                         .background(
                             Brush.verticalGradient(
                                 0.45f to Color.Transparent,
@@ -356,70 +541,362 @@ private fun TopPickCard(
                 eyebrowColor = PhotoEyebrow
                 branded = false
             }
-            TopPickKind.MADE_FOR_YOU_MIX -> {
-                MixFluidArt(pick.title, Modifier.fillMaxSize())
-                eyebrowColor = Color.White
-                branded = false
-            }
         }
+        // Not over the artist collage: the glow tinted the photos themselves.
+        if (branded && pick.kind != TopPickKind.ARTIST_AND_SIMILAR && pick.kind != TopPickKind.MOST_PLAYED) {
+            AmbientGlow(base = glowBase(pick), modifier = Modifier.fillMaxSize())
+        }
+        // Most Played punya overlay editorial sendiri (label recap, judul, tagline, artis).
         if (pick.kind == TopPickKind.MADE_FOR_YOU_MIX) {
             MixCoverOverlay(
                 title = text.title,
                 subtitle = text.subtitle,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .hideDuringCoverFlight(coverToken)
+                    .revealAfterCoverLanding(coverToken),
+            )
+        } else if (pick.kind == TopPickKind.MOST_PLAYED) {
+            MostPlayedRecapOverlay(
+                text = text,
+                modifier = Modifier.fillMaxSize().hideDuringCoverFlight(coverToken),
             )
         } else {
-            if (branded) {
-                Icon(
-                    painter = painterResource(Res.drawable.ic_logo),
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 12.dp, end = 12.dp)
-                        .height(15.dp)
-                        .aspectRatio(732f / 440f),
-                )
-            }
-            CardCaption(text, eyebrowColor, Modifier.align(Alignment.BottomStart))
+            CardOverlay(
+                text = text,
+                eyebrowColor = eyebrowColor,
+                branded = branded,
+                titleInArt = pick.kind == TopPickKind.MOOD ||
+                    pick.kind == TopPickKind.PERSONAL_STATION ||
+                    pick.kind == TopPickKind.DISCOVERY_STATION,
+                modifier = Modifier.fillMaxSize().hideDuringCoverFlight(coverToken),
+            )
         }
     }
 }
 
+/**
+ * What sits over a card's art, laid out as Apple Music's Friends Mix is: the
+ * wordmark top-left and, on stations and moods, the name large under it; the
+ * rest rides in a band along the foot. On the branded cards the band is a
+ * darker layer with a faint lit edge; on photo cards it fades up from the
+ * picture instead, so the cover is never cut by a line.
+ */
 @Composable
-private fun CardCaption(text: CardText, eyebrowColor: Color, modifier: Modifier) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
-    ) {
-        Text(
-            text = text.eyebrow,
-            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 16.sp),
-            color = eyebrowColor,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            text = text.title,
-            style = MaterialTheme.typography.titleMedium.copy(
-                fontSize = 17.sp,
-                lineHeight = 21.sp,
-                fontWeight = FontWeight.SemiBold,
-            ),
-            color = Color.White,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (text.subtitle.isNotBlank()) {
-            Text(
-                text = text.subtitle,
-                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 16.sp),
-                color = Color.White.copy(alpha = 0.86f),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+private fun CardOverlay(
+    text: CardText,
+    eyebrowColor: Color,
+    branded: Boolean,
+    titleInArt: Boolean,
+    modifier: Modifier,
+) {
+    Box(modifier) {
+        if (branded) {
+            Wordmark(
+                logoHeight = 14.dp,
+                fontSize = 16.sp,
+                color = Color.White,
+                gap = 2.dp,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 12.dp, end = 12.dp),
             )
         }
+        // The name now sits in the art, just above the darker band at the foot.
+        val band = if (titleInArt) {
+            Brush.verticalGradient(
+                0f to Color.Black.copy(alpha = 0.30f),
+                1f to Color.Black.copy(alpha = 0.62f),
+            )
+        } else {
+            Brush.verticalGradient(
+                0f to Color.Transparent,
+                0.30f to Color.Black.copy(alpha = 0.34f),
+                1f to Color.Black.copy(alpha = 0.62f),
+            )
+        }
+        Column(
+            Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth(),
+        ) {
+            if (titleInArt) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                0f to Color.Transparent,
+                                1f to Color.Black.copy(alpha = 0.30f),
+                            ),
+                        )
+                        .padding(start = 18.dp, end = 18.dp, top = 36.dp, bottom = 14.dp),
+                ) {
+                    Box(
+                        Modifier
+                            .width(26.dp)
+                            .height(2.dp)
+                            .clip(RoundedCornerShape(1.dp))
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(Color(0xFFFFE9B8), Color(0xFFD9A441)),
+                                ),
+                            ),
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = text.title,
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontSize = 27.sp,
+                            lineHeight = 29.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = (-0.6).sp,
+                            shadow = Shadow(
+                                color = Color.Black.copy(alpha = 0.35f),
+                                offset = Offset(0f, 3f),
+                                blurRadius = 14f,
+                            ),
+                        ),
+                        color = Color.White,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(0.75.dp)
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(
+                                    Color.Transparent,
+                                    Color.White.copy(alpha = 0.45f),
+                                    Color.Transparent,
+                                ),
+                            ),
+                        ),
+                )
+            }
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(band),
+            ) {
+                Column(
+                    Modifier.padding(
+                        start = 18.dp,
+                        end = 18.dp,
+                        top = if (titleInArt) 14.dp else if (branded) 20.dp else 30.dp,
+                        bottom = 16.dp,
+                    ),
+                ) {
+                    Text(
+                        text = if (titleInArt) text.eyebrow.uppercase() else text.eyebrow,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = if (titleInArt) 12.sp else 13.sp,
+                            lineHeight = 16.sp,
+                            fontWeight = if (titleInArt) FontWeight.SemiBold else FontWeight.Medium,
+                            letterSpacing = if (titleInArt) 1.2.sp else 0.sp,
+                        ),
+                        color = eyebrowColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (!titleInArt) {
+                        Text(
+                            text = text.title,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontSize = 17.sp,
+                                lineHeight = 21.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                            color = Color.White,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (text.subtitle.isNotBlank()) {
+                        Text(
+                            text = text.subtitle,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 16.sp),
+                            color = Color.White.copy(alpha = 0.90f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private val RecapSurface = Color(0xFF171719)
+private val RecapAccent = Color(0xFFFA243C)
+private val RecapMuted = Color(0xFFA1A1A6)
+
+/** Kartu tetap pada geometri aslinya tanpa shrink saat ditekan. */
+@Composable
+private fun Modifier.recapPressFeedback(): Modifier = this
+
+/**
+ * Teks editorial kartu Most Played: label recap dengan ikon equalizer dan wordmark di
+ * atas; judul besar, tagline, dan daftar artis di bawah. Semua teks dari data kartu dan
+ * string resource.
+ */
+@Composable
+private fun MostPlayedRecapOverlay(text: CardText, modifier: Modifier) {
+    Box(modifier) {
+        androidx.compose.foundation.layout.Row(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 12.dp, top = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Canvas(Modifier.size(width = 11.dp, height = 11.dp)) {
+                val bar = size.width * 0.24f
+                val gap = (size.width - bar * 3f) / 2f
+                val heights = floatArrayOf(0.55f, 1f, 0.75f)
+                for (i in 0..2) {
+                    val bh = size.height * heights[i]
+                    drawRoundRect(
+                        color = RecapAccent,
+                        topLeft = Offset(i * (bar + gap), size.height - bh),
+                        size = androidx.compose.ui.geometry.Size(bar, bh),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(bar / 2f),
+                    )
+                }
+            }
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = text.eyebrow.uppercase(),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 9.sp,
+                    lineHeight = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.4.sp,
+                ),
+                color = RecapAccent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Wordmark(
+                logoHeight = 12.dp,
+                fontSize = 13.sp,
+                color = Color.White,
+                gap = 2.dp,
+            )
+        }
+        Column(
+            Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .padding(start = 18.dp, end = 18.dp, bottom = 18.dp),
+        ) {
+            Text(
+                text = text.title,
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    fontSize = 26.sp,
+                    lineHeight = 28.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = (-0.6).sp,
+                ),
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = stringResource(Res.string.top_pick_most_played_tagline),
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 17.sp),
+                color = RecapMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (text.subtitle.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(0.75.dp)
+                        .background(Color.White.copy(alpha = 0.12f)),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = text.subtitle,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 17.sp),
+                    color = Color.White.copy(alpha = 0.92f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** The colour a branded card's glow is mixed from. */
+private fun glowBase(pick: TopPick): Color = when (pick.kind) {
+    TopPickKind.PERSONAL_STATION -> Color(0xFFFA4A6E)
+    TopPickKind.DISCOVERY_STATION -> Color(0xFF3A52B0)
+    TopPickKind.MOOD -> (pick.mood ?: TopPickMood.FEEL_GOOD).style().background
+    TopPickKind.ARTIST_AND_SIMILAR -> collagePalette(pick.artistName.orEmpty()).bottom
+    else -> Color(0xFF444444)
+}
+
+/** One slow drift of the glow; longer than the stations' breath so the two never line up. */
+private const val GLOW_PERIOD_MS = 14_000
+
+private val GlowAlpha = floatArrayOf(0.30f, 0.26f, 0.20f)
+
+private class GlowBrushes(val radii: FloatArray, val blobs: List<Brush>)
+
+/**
+ * Soft light drifting over a card's colour, the way Friends Mix's backdrop
+ * flows: a pale blob, a blob turned a little around the hue wheel, and a deep
+ * one at the foot. The brushes are built once per card size and only moved,
+ * and the phase is read in the draw pass alone, like the stations' loops.
+ */
+@Composable
+private fun AmbientGlow(base: Color, modifier: Modifier = Modifier) {
+    val phase by loopPhase(GLOW_PERIOD_MS)
+    val tones = remember(base) {
+        val turned = Color(base.green, base.blue, base.red)
+        listOf(
+            lerp(base, Color.White, 0.45f),
+            lerp(base, turned, 0.40f),
+            lerp(base, Color.Black, 0.50f),
+        )
+    }
+    val cache = remember(tones) {
+        SizeCache { size ->
+            val reach = maxOf(size.width, size.height)
+            val radii = floatArrayOf(reach * 0.80f, reach * 0.72f, reach * 0.85f)
+            GlowBrushes(
+                radii = radii,
+                blobs = tones.mapIndexed { i, tone ->
+                    Brush.radialGradient(
+                        0f to tone.copy(alpha = GlowAlpha[i]),
+                        1f to Color.Transparent,
+                        center = Offset(radii[i], radii[i]),
+                        radius = radii[i],
+                    )
+                },
+            )
+        }
+    }
+    Canvas(modifier.then(RetainedArt)) {
+        val w = size.width
+        val h = size.height
+        val glow = cache.get(size)
+        fun blob(index: Int, cx: Float, cy: Float) {
+            val radius = glow.radii[index]
+            translate(left = cx - radius, top = cy - radius) {
+                drawCircle(glow.blobs[index], radius = radius, center = Offset(radius, radius))
+            }
+        }
+        blob(0, w * (0.20f + 0.16f * wave(phase, 0f)), h * (0.18f + 0.10f * wave(phase, 0.25f)))
+        blob(1, w * (0.85f + 0.14f * wave(phase, 0.40f)), h * (0.52f + 0.14f * wave(phase, 0.70f)))
+        blob(2, w * (0.35f + 0.20f * wave(phase, 0.60f)), h * (0.95f + 0.05f * wave(phase, 0.10f)))
     }
 }
 
@@ -440,7 +917,15 @@ private val PhotoEyebrow = Color.White.copy(alpha = 0.62f)
  * once found, dissolving into the blur the same way the still does.
  */
 @Composable
-private fun ReleaseArt(url: String?, modifier: Modifier, motion: CardMotionSource? = null) {
+private fun ReleaseArt(
+    url: String?,
+    modifier: Modifier,
+    coverModifier: Modifier = Modifier,
+    coverHide: Modifier = Modifier,
+    motion: CardMotionSource? = null,
+    onClip: (CanvasArtwork?) -> Unit = {},
+    frameGrab: CanvasFrameGrab? = null,
+) {
     // How much of the still the clip has covered. Two faded layers stacked
     // would leave the still showing through the clip's own fade, so the still
     // steps out as the clip comes in.
@@ -471,7 +956,7 @@ private fun ReleaseArt(url: String?, modifier: Modifier, motion: CardMotionSourc
             model = url.croppedAt(HEADER_ART_PX).whenArtworkReady(),
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = Modifier
+            modifier = coverModifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 // Faded out over its last stretch, so the cover runs into the
@@ -492,9 +977,11 @@ private fun ReleaseArt(url: String?, modifier: Modifier, motion: CardMotionSourc
         )
         CardMotion(
             motion,
-            Modifier.fillMaxWidth().aspectRatio(1f),
+            Modifier.fillMaxWidth().aspectRatio(1f).then(coverHide),
             bottomFade = 0.22f,
             onCover = { covered = it },
+            onCanvas = onClip,
+            frameGrab = frameGrab,
         )
     }
 }
@@ -504,6 +991,26 @@ private fun ReleaseArt(url: String?, modifier: Modifier, motion: CardMotionSourc
  * while the card is on screen.
  */
 private class CardMotionSource(val key: Any, val lookup: suspend () -> CanvasArtwork?)
+
+/**
+ * Seni kartu Most Played: permukaan #171719 yang sama dengan seni di dalamnya, jadi
+ * komposisi cover menyatu dengan kaki kartu tanpa blur backdrop dan tanpa layer offscreen.
+ */
+@Composable
+private fun MostPlayedCardArt(
+    modifier: Modifier,
+    coverModifier: Modifier,
+    art: @Composable (Modifier) -> Unit,
+) {
+    Box(modifier.background(RecapSurface)) {
+        art(
+            coverModifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clipToBounds(),
+        )
+    }
+}
 
 /** The artist's own looping clip, for the cards that show their face. */
 private fun TopPick.artistMotion(): CardMotionSource? {
@@ -529,6 +1036,8 @@ private fun CardMotion(
     modifier: Modifier,
     bottomFade: Float = 0f,
     onCover: (Float) -> Unit = {},
+    onCanvas: (CanvasArtwork?) -> Unit = {},
+    frameGrab: CanvasFrameGrab? = null,
 ) {
     if (source == null || !LocalArtworkImages.current) return
     // Looked up whether or not the clip may play yet, so the answer is to hand
@@ -552,10 +1061,21 @@ private fun CardMotion(
     // the frame it lands back on the mini player. The still under it comes back
     // as it goes.
     var mounted by remember { mutableStateOf(false) }
+    // Frame terakhir klip (dan posisinya), ditahan selama klip dilepas atau
+    // belum melukis frame pertamanya, supaya yang tampil bukan thumbnail awal.
+    var held by remember(canvas) { mutableStateOf<ImageBitmap?>(null) }
+    var heldPositionMs by remember(canvas) { mutableLongStateOf(0L) }
+    var clipShown by remember(canvas) { mutableStateOf(false) }
     LaunchedEffect(motion, mayPlay, scrolling) {
         when {
             // The row has handed the slot on, and it does that only at rest.
-            !mayPlay -> mounted = false
+            !mayPlay -> {
+                frameGrab?.grab?.invoke()?.let {
+                    held = it
+                    heldPositionMs = 0L
+                }
+                mounted = false
+            }
             motion -> if (!mounted) {
                 delay(CLIP_START_DELAY_MS)
                 snapshotFlow { scrolling() }.first { !it }
@@ -563,9 +1083,35 @@ private fun CardMotion(
             }
             else -> {
                 delay(CLIP_RELEASE_DELAY_MS)
+                if (held == null) frameGrab?.grab?.invoke()?.let { held = it }
                 mounted = false
             }
         }
+    }
+    // Tells the card which clip is on screen, so a tap can fly it with the cover.
+    val reportCanvas by rememberUpdatedState(onCanvas)
+    DisposableEffect(canvas, mounted) {
+        if (mounted) reportCanvas(canvas)
+        onDispose { reportCanvas(null) }
+    }
+    val heldFrame = held
+    if (heldFrame != null && !clipShown) {
+        Image(
+            bitmap = heldFrame,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    if (bottomFade > 0f) {
+                        drawRect(
+                            Brush.verticalGradient(1f - bottomFade to Color.Black, 1f to Color.Transparent),
+                            blendMode = BlendMode.DstIn,
+                        )
+                    }
+                },
+        )
     }
     if (!mounted) return
     // Only paused for a scroll or for Now Playing passing over: neither is worth
@@ -578,6 +1124,17 @@ private fun CardMotion(
         bottomFade = bottomFade,
         onCoverChanged = onCover,
         pausedForTransition = !motion || scrolling(),
+        startPositionMs = heldPositionMs,
+        revealInstantly = held != null,
+        captureStill = !motion,
+        onStillCaptured = { image, position ->
+            if (image != null) {
+                held = image
+                heldPositionMs = position
+            }
+        },
+        onRenderedChanged = { clipShown = it },
+        frameGrab = frameGrab,
     )
 }
 
@@ -984,6 +1541,53 @@ private fun TopPickMood.lineRes() = when (this) {
     TopPickMood.WORK -> Res.string.mood_work_line
 }
 
+/**
+ * A mood's backdrop brushes, built once per card size: a diagonal sweep from a
+ * lit corner to a deep one, a soft light at the top-left, a halo behind the
+ * emblem and a darker foot. Only drawn per frame, never rebuilt.
+ */
+private class MoodBackdrop(style: MoodStyle, size: Size) {
+    val base: Brush = Brush.linearGradient(
+        listOf(
+            lerp(style.background, Color.White, 0.18f),
+            style.background,
+            lerp(style.background, Color.Black, 0.36f),
+        ),
+        start = Offset.Zero,
+        end = Offset(size.width, size.height),
+    )
+    val glowRadius = maxOf(size.width, size.height) * 0.75f
+    val glow: Brush = Brush.radialGradient(
+        0f to Color.White.copy(alpha = 0.34f),
+        1f to Color.Transparent,
+        center = Offset(glowRadius, glowRadius),
+        radius = glowRadius,
+    )
+    val haloRadius = size.width * 0.62f
+    val halo: Brush = Brush.radialGradient(
+        0f to style.stroke.copy(alpha = 0.28f),
+        1f to Color.Transparent,
+        center = Offset(haloRadius, haloRadius),
+        radius = haloRadius,
+    )
+    val foot: Brush = Brush.verticalGradient(
+        0.55f to Color.Transparent,
+        1f to Color.Black.copy(alpha = 0.30f),
+        startY = 0f,
+        endY = size.height,
+    )
+}
+
+/** Small lights scattered round the emblem: x, y as shares of the card, then radius in dp. */
+private val MoodSparkles = floatArrayOf(
+    0.12f, 0.14f, 1.4f,
+    0.86f, 0.22f, 1.0f,
+    0.20f, 0.82f, 1.0f,
+    0.90f, 0.80f, 1.6f,
+    0.08f, 0.52f, 0.9f,
+    0.93f, 0.50f, 0.9f,
+)
+
 /** The emblem's square, in card pixels; [x] and [y] take shares of its side. */
 private class Frame(val left: Float, val top: Float, val side: Float) {
     fun x(f: Float) = left + side * f
@@ -1010,19 +1614,39 @@ private fun MoodArt(
     // and recomposes nothing.
     val loop = if (still) null else loopPhase(style.periodMs)
     val cache = remember(mood) { EmblemCache() }
+    val backdrop = remember(style) { SizeCache { size -> MoodBackdrop(style, size) } }
     Canvas(if (still) modifier else modifier.then(RetainedArt)) {
-        drawRect(style.background)
+        val b = backdrop.get(size)
+        drawRect(b.base)
+        translate(left = -b.glowRadius * 0.35f, top = -b.glowRadius * 0.35f) {
+            drawCircle(b.glow, radius = b.glowRadius, center = Offset(b.glowRadius, b.glowRadius))
+        }
+        drawRect(b.foot)
+        for (i in MoodSparkles.indices step 3) {
+            drawCircle(
+                color = style.stroke.copy(alpha = 0.40f),
+                radius = MoodSparkles[i + 2].dp.toPx(),
+                center = Offset(size.width * MoodSparkles[i], size.height * MoodSparkles[i + 1]),
+            )
+        }
         val w = size.width
         val h = size.height
         val f = if (square) {
             val side = w * 0.70f
             Frame(left = (w - side) / 2f, top = (h - side) / 2f, side = side)
         } else {
-            // Most of the card's width, but never down into the caption: the
-            // emblem keeps to the card's top two thirds whatever its proportions.
-            val side = minOf(w * 0.84f, h * 0.62f)
-            Frame(left = (w - side) / 2f, top = h * 0.37f - side / 2f, side = side)
+            // Smaller and lower than it was: the name now sits large above it
+            // and the caption band below, so the emblem keeps to the middle.
+            val side = minOf(w * 0.66f, h * 0.46f)
+            Frame(left = (w - side) / 2f, top = h * 0.545f - side / 2f, side = side)
         }
+        // A soft halo and two faint rings behind the emblem.
+        translate(left = f.center.x - b.haloRadius, top = f.center.y - b.haloRadius) {
+            drawCircle(b.halo, radius = b.haloRadius, center = Offset(b.haloRadius, b.haloRadius))
+        }
+        val ring = Stroke(width = 1.dp.toPx())
+        drawCircle(style.stroke.copy(alpha = 0.16f), radius = f.side * 0.66f, center = f.center, style = ring)
+        drawCircle(style.stroke.copy(alpha = 0.09f), radius = f.side * 0.86f, center = f.center, style = ring)
         val stroke = cache.stroke((if (square) 2.dp else 2.5.dp).toPx())
         drawEmblem(mood, f, loop?.value ?: mood.stillPhase(), style.stroke, stroke, cache)
     }
@@ -1616,11 +2240,22 @@ fun MoodGridPage(
 @Composable
 private fun MoodTile(mood: TopPickMood, onClick: (TopPickMood, String) -> Unit, modifier: Modifier) {
     val title = stringResource(mood.titleRes())
-    Column(modifier.clickable { onClick(mood, title) }) {
+    Column(
+        modifier.longPressMenuClickable(
+            onClick = { onClick(mood, title) },
+            onLongClick = null,
+        ),
+    ) {
         Box(
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
+                // Sinks, dims and ripples the moment a finger lands, rim and
+                // all: the scale is drawn outside the clip below.
+                .instantPressClickable(
+                    shape = RoundedCornerShape(12.dp),
+                    onClick = { onClick(mood, title) },
+                )
                 .clip(RoundedCornerShape(12.dp))
                 .thumbnailBorder(RoundedCornerShape(12.dp)),
         ) {
@@ -1629,22 +2264,48 @@ private fun MoodTile(mood: TopPickMood, onClick: (TopPickMood, String) -> Unit, 
             // it — for as long as the shelf was in view; the motion is Top
             // Picks' own, one card at a time.
             MoodArt(mood, mood.style(), Modifier.fillMaxSize(), square = true, still = true)
-            Icon(
-                painter = painterResource(Res.drawable.ic_logo),
-                contentDescription = null,
-                tint = Color.White,
+            Wordmark(
+                logoHeight = 10.dp,
+                fontSize = 12.sp,
+                color = Color.White,
+                gap = 2.dp,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 8.dp, end = 8.dp)
-                    .height(11.dp)
-                    .aspectRatio(732f / 440f),
+                    .padding(top = 10.dp, end = 10.dp),
             )
+            // A glass play button, so the tile reads as a station to start.
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(10.dp)
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.22f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Canvas(Modifier.size(12.dp)) {
+                    val tri = Path().apply {
+                        moveTo(size.width * 0.12f, 0f)
+                        lineTo(size.width, size.height / 2f)
+                        lineTo(size.width * 0.12f, size.height)
+                        close()
+                    }
+                    drawPath(tri, Color.White)
+                }
+            }
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(12.dp))
         Text(
             text = title,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
             color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = stringResource(mood.lineRes()),
+            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 16.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )

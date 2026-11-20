@@ -11,7 +11,6 @@ import com.miori.music.data.lyrics.LyricsSource
 import com.miori.music.data.model.Song
 import com.miori.music.data.settings.AudioQuality
 import com.miori.music.data.settings.LastPlayerScreen
-import com.miori.music.data.settings.PlayerTheme
 import com.miori.music.data.settings.SmartAnalysis
 import com.miori.music.data.settings.MixBlend
 import com.miori.music.data.settings.MixTransitionView
@@ -36,6 +35,12 @@ interface PlayerHost {
     /** A Canvas already settled for [song], without a lookup. */
     fun cachedCanvas(song: Song): CanvasArtwork?
 
+    /**
+     * A Canvas for [song] whose clip is already fully on disk. Played even
+     * when canvas over cellular is off, because it costs no data.
+     */
+    fun cachedCanvasOnDisk(song: Song): CanvasArtwork? = null
+
     /** Looks a Canvas up for [song]; null is the normal answer. */
     suspend fun canvasFor(song: Song): CanvasArtwork?
 
@@ -57,9 +62,6 @@ interface PlayerHost {
      */
     @Composable
     fun MusicVideo(videoId: String, fit: Boolean, onRenderedChanged: (Boolean) -> Unit, modifier: Modifier) = Unit
-
-    /** Whether [videoId] shows its picture, rather than playing as audio by the listener's choice. */
-    fun showsMusicVideoPicture(videoId: String): Boolean = true
 
     /** The playing music video's width over its height. */
     val musicVideoAspect: StateFlow<Float> get() = DefaultVideoAspect
@@ -146,6 +148,12 @@ interface PlayerHost {
     fun rememberPlayerFrost(): PlayerFrost? = null
 
     /**
+     * Flips the Automix (beta) switch, the same one Settings has. Where the
+     * models are not on the device yet, this starts fetching them instead.
+     */
+    fun toggleAutomix() = Unit
+
+    /**
      * Whether lines can be put on a share card here. False hides the pick mode
      * altogether rather than offering a mode with nowhere to put its result.
      */
@@ -187,8 +195,7 @@ internal fun videoQualityLabel(height: Int): String = when {
 
 /** Whether [song]'s picture can be shown here — a music video, on a platform that plays one. */
 internal fun showsMusicVideo(song: Song): Boolean =
-    song.isVideo && PlayerPlatform.host.musicVideoSupported &&
-        PlayerPlatform.host.showsMusicVideoPicture(song.videoId)
+    song.isVideo && PlayerPlatform.host.musicVideoSupported
 
 /** @see PlayerHost.MusicVideo */
 @Composable
@@ -246,19 +253,29 @@ interface PlayerSettingsSource {
     /** Hide the device status bar while the player is up. Always false where there is none. */
     val hideStatusBar: StateFlow<Boolean>
     val lastPlayerScreen: StateFlow<LastPlayerScreen>
-    val playerTheme: StateFlow<PlayerTheme>
+    val legacyMeshGradient: StateFlow<Boolean>
     val lyricsBlur: StateFlow<Boolean>
+    /** Efek lirik LiquidFlow nyala: efek Motion dipakai. Mati: efek bawaan. */
+    val liquidFlow: StateFlow<Boolean>
     val lyricsOffsetMs: StateFlow<Int>
     val lyricsSourceOrder: StateFlow<List<LyricsSource>>
     val meteredConnection: StateFlow<Boolean?>
     /** A temporary cap over both ceilings, null when none applies — the watch's, on the phone. */
     val streamCeilingOverride: StateFlow<AudioQuality?>
     val preferUsbDac: StateFlow<Boolean>
-    val prioritizeSpotifyCanvas: StateFlow<Boolean>
+    val canvasProviderOrder: StateFlow<List<com.miori.music.data.canvas.CanvasProvider>>
     val reduceAnimation: StateFlow<Boolean>
+    /** Whether the cover slides/sweeps to the new song's on a song change, rather than cutting. */
+    val coverSlideAnimation: StateFlow<Boolean>
+    /** Whether that change uses the fluid shader morph instead of the sweep (API 33+ only). */
+    val coverFluidAnimation: StateFlow<Boolean>
+    /** Whether the full cover effect (fluid or slide) runs only while Automix or a crossfade is playing. */
+    val coverMixOnlyEffects: StateFlow<Boolean>
     val reduceDynamicBlur: StateFlow<Boolean>
-    /** Turns [LocalPlayerChrome] off: glyphs and text over the artwork in plain white. */
-    val disableBlendEffects: StateFlow<Boolean>
+    /** Keeps a full-screen Spotify Canvas playing, blurred live, behind the lyrics and queue. */
+    val canvasLiveBlurPanels: StateFlow<Boolean>
+    /** Whether Dolby Atmos is both playable on this device and switched on, so the player can show its badge. */
+    val dolbyAtmosActive: StateFlow<Boolean>
     val showNerdStats: StateFlow<Boolean>
     /** Whether the output / Listen Together pill sits under the transport. */
     val showListenTogetherButton: StateFlow<Boolean>
@@ -272,24 +289,29 @@ interface PlayerSettingsSource {
     val smartFadeEnabled: StateFlow<Boolean>
     /** True only while an analysed Automix transition is audibly mixing two tracks. */
     val smartMixInProgress: StateFlow<Boolean>
+    /** True selama transisi apa pun (crossfade biasa maupun Automix) sedang berjalan. */
+    val crossfadeRunning: StateFlow<Boolean>
+    /** Lama crossfade next/prev yang sedang berjalan (ms), 0 bila tidak ada. */
+    val skipCrossfadeMs: StateFlow<Long>
+    /** Lama mix/crossfade yang sedang berjalan (ms), 0 bila tidak ada. */
+    val mixFadeMs: StateFlow<Long>
+    /** Cover lagu tujuan selama mix/crossfade berjalan, null bila tidak ada. */
+    val mixIncomingArtworkUrl: StateFlow<String?>
     /** The Automix blend in flight, for the scrubber's beat glow; null between blends. */
     val smartMixBlend: StateFlow<MixBlend?>
     /** The Automix blend in flight laid out for the mix popup; null between blends. */
     val smartMixView: StateFlow<MixTransitionView?>
     /** Progress through [smartMixView]'s blend, 0..1. */
     val smartMixProgress: StateFlow<Float>
-    /** The next transition as planned, while the mix popup is open between blends; null otherwise. */
-    val smartMixPreview: StateFlow<MixTransitionView?>
     val smartTransitionWindow: StateFlow<TransitionWindow?>
     val spotifyCanvasAutoHide: StateFlow<Boolean>
     val syncedLyrics: StateFlow<Boolean>
+    val lyricStrip: StateFlow<Boolean>
     val translationLanguage: StateFlow<String>
     val versionAlignmentInProgress: StateFlow<Boolean>
 
     fun setLastPlayerScreen(value: LastPlayerScreen)
     fun setLyricsOffsetMs(value: Int)
-    /** Whether the mix popup is up, so the host lays out [smartMixPreview] for it. */
-    fun setMixViewOpen(open: Boolean)
 }
 
 /** The player's name for the installed host's settings, read where AppSettings used to be. */
@@ -373,6 +395,14 @@ enum class CanvasContentMode {
     FIT_PORTRAIT,
 }
 
+/**
+ * Pegangan yang diisi clip yang sedang ter-mount dengan pembaca frame hidupnya,
+ * supaya layar bisa mengambil gambar yang sedang tampil sesaat sebelum lagu di-skip.
+ */
+class CanvasFrameGrab {
+    var grab: (() -> ImageBitmap?)? = null
+}
+
 /** Everything [CanvasArtworkPlayer] is asked, handed to the platform's decoder as one value. */
 class CanvasVideoSpec(
     val canvas: CanvasArtwork,
@@ -389,6 +419,7 @@ class CanvasVideoSpec(
     val onCoverChanged: (Float) -> Unit,
     val bottomFade: Float,
     val bottomFadeEndPx: Float?,
+    val blurPx: () -> Float,
     val pausedForTransition: Boolean,
     val resumeDelayMs: Long,
     val startPositionMs: Long,
@@ -396,6 +427,11 @@ class CanvasVideoSpec(
     val captureStill: Boolean,
     val onStillCaptured: (ImageBitmap?, Long) -> Unit,
     val onResumed: () -> Unit,
+    val frameGrab: CanvasFrameGrab?,
+    /** Pengali [bottomFade] yang dibaca tiap frame, untuk fade yang ikut animasi. */
+    val bottomFadeScale: () -> Float = { 1f },
+    /** 0..1: seberapa jauh klip portrait sudah tumbuh dari kotak contain ke crop layar penuh. */
+    val fillProgress: () -> Float = { 0f },
 )
 
 /**
@@ -415,14 +451,17 @@ fun CanvasArtworkPlayer(
     onRenderedChanged: (Boolean) -> Unit = {},
     onFrameCaptured: (ImageBitmap) -> Unit = {},
     refreshFrameEveryMs: Long? = null,
-    /**
-     * 0 for no frames at all, which saves a main-thread readback on each
-     * fade-in: only a caller that takes [onFrameCaptured] asks for a size.
-     */
-    frameCapturePx: Int = 0,
+    /** 0 for no frames at all, which saves a main-thread readback on each fade-in. */
+    frameCapturePx: Int = CANVAS_FRAME_CAPTURE_PX,
     onCoverChanged: (Float) -> Unit = {},
     bottomFade: Float = 0f,
     bottomFadeEndPx: Float? = null,
+    /** Blur radius in px applied on the video view itself; a Compose blur over a TextureView is unreliable. */
+    blurPx: () -> Float = { 0f },
+    /** Pengali [bottomFade] yang dibaca tiap frame, untuk fade yang ikut animasi. */
+    bottomFadeScale: () -> Float = { 1f },
+    /** 0..1: seberapa jauh klip portrait sudah tumbuh dari kotak contain ke crop layar penuh. */
+    fillProgress: () -> Float = { 0f },
     pausedForTransition: Boolean = false,
     /** How long the clip holds still after [pausedForTransition] lifts before it plays on. */
     resumeDelayMs: Long = 0L,
@@ -439,6 +478,8 @@ fun CanvasArtworkPlayer(
     onStillCaptured: (ImageBitmap?, Long) -> Unit = { _, _ -> },
     /** The clip has moved on from the frame it was last captured or started at. */
     onResumed: () -> Unit = {},
+    /** Diisi clip dengan pembaca frame hidupnya, untuk transisi saat skip. */
+    frameGrab: CanvasFrameGrab? = null,
 ) {
     PlayerPlatform.host.CanvasVideo(
         CanvasVideoSpec(
@@ -456,6 +497,9 @@ fun CanvasArtworkPlayer(
             onCoverChanged = onCoverChanged,
             bottomFade = bottomFade,
             bottomFadeEndPx = bottomFadeEndPx,
+            blurPx = blurPx,
+            bottomFadeScale = bottomFadeScale,
+            fillProgress = fillProgress,
             pausedForTransition = pausedForTransition,
             resumeDelayMs = resumeDelayMs,
             startPositionMs = startPositionMs,
@@ -463,6 +507,7 @@ fun CanvasArtworkPlayer(
             captureStill = captureStill,
             onStillCaptured = onStillCaptured,
             onResumed = onResumed,
+            frameGrab = frameGrab,
         ),
         modifier,
     )

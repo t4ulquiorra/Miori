@@ -300,6 +300,8 @@ object AudioCache {
         analysisHeads.clear()
         analysisHeadsInFlight.clear()
         analysisHeadWant.clear()
+        analysisHeadFailures.clear()
+        analysisHeadRetryAt.clear()
         renditionKeys.clear()
         scope.launch {
             cache.keys.toList().forEach { runCatching { cache.removeResource(it) } }
@@ -465,9 +467,13 @@ object AudioCache {
                 val rendition = QualityUpgrade.cacheTag(spec.uri)
                 when {
                     rendition != null -> "$videoId#$rendition"
-                    SourceResolver.canSubstituteForYouTube() ->
-                        "$videoId#alt${atmosKeySuffix()}".let { completeSibling(videoId, it) ?: it }
-                    else -> completeSibling(videoId, videoId) ?: videoId
+                    else -> keptLosslessCopy(videoId)
+                        ?.takeIf { spec.uri.getQueryParameter(WATCH_READ_PARAM) == null }
+                        ?: when {
+                            SourceResolver.canSubstituteForYouTube(videoId) ->
+                                "$videoId#alt${atmosKeySuffix()}".let { completeSibling(videoId, it) ?: it }
+                            else -> completeSibling(videoId, videoId) ?: videoId
+                        }
                 }
             }
             // A source-backed track keys on the source and its track id alone.
@@ -576,6 +582,19 @@ object AudioCache {
             cache.getCachedSpans(key).isNotEmpty() &&
                 cache.getContentMetadata(key).get(META_ORIGIN, null as String?) == Origin.YOUTUBE.name
         }.getOrDefault(false)
+    }
+
+    /**
+     * Key of a complete FLAC copy of [videoId] already on disk, whatever the
+     * current quality ceiling says. A complete entry is never written to
+     * again, so reading it cannot create a mixed-file seam, and the decoder's
+     * own mime then lights the Lossless badge.
+     */
+    private fun keptLosslessCopy(videoId: String): String? {
+        if (!::cache.isInitialized) return null
+        return cache.keys
+            .filter { key -> key.startsWith("$videoId#") && !key.endsWith("#watch") }
+            .firstOrNull { key -> isComplete(key) && containerOf(key)?.first == "flac" }
     }
 
     /** Whether every byte of the entry [key] is on disk. */
@@ -907,6 +926,9 @@ object AudioCache {
         }.sortedByDescending { it.lastUsedMs }
     }
 
+    /** Bytes the song cache occupies on disk right now, across every entry it holds. */
+    fun usedBytes(): Long = if (::cache.isInitialized) cache.cacheSpace else 0L
+
     /** Every cache key holding a rendition of [mediaId]; see [keyFactory]. */
     private fun keysOf(mediaId: String): List<String> {
         val base = cacheKeyBaseOf(mediaId)
@@ -1126,7 +1148,9 @@ object AudioCache {
      *    song. WebM, MP4 and FLAC pass, as [cachedContainerOf] reads them.
      */
     private fun keepsAddonCopy(key: String): Boolean =
-        !key.contains("#hifi") && isComplete(key) && containerOf(key) != null
+        isComplete(key) && containerOf(key).let { container ->
+            container != null && (!key.contains("#hifi") || container.first == "flac")
+        }
 
     /** The part of a cache key that names the track, before any `#rendition`; see [keyFactory]. */
     private fun cacheKeyBaseOf(mediaId: String): String =
@@ -1403,7 +1427,7 @@ object AudioCache {
         // rather than waiting behind it, that walk is what a track waits on
         // whenever the modules are slow, and warming it here is what makes the
         // race worth running at all.
-        val substitutable = SourceResolver.canSubstituteForYouTube()
+        val substitutable = SourceResolver.canSubstituteForYouTube(videoIds.firstOrNull())
         job = videoIds.firstOrNull()?.let { next ->
             val target = upcoming.firstOrNull { it.mediaId == next }?.target
             // A track the listener reverted plays from its own `#original`
@@ -1682,6 +1706,12 @@ object AudioCache {
      */
     private val analysisHeadWant = ConcurrentHashMap<String, Long>()
 
+    /** Berapa kali round head untuk sebuah video gagal, supaya retry dibatasi. */
+    private val analysisHeadFailures = ConcurrentHashMap<String, Int>()
+
+    /** Waktu (elapsedRealtime) paling cepat retry berikutnya boleh dimulai. */
+    private val analysisHeadRetryAt = ConcurrentHashMap<String, Long>()
+
     /**
      * Pulls [uri]'s recording onto disk under the plain YouTube key, so Smart
      * Fade has something to measure; sized by [analysisHeadSize].
@@ -1759,6 +1789,12 @@ object AudioCache {
      */
     private const val HEAD_ROUND_SETTLE_MS = 500L
 
+    /** Batas percobaan ulang head analisis yang gagal, di luar awaitAnalysisHead. */
+    private const val MAX_ANALYSIS_HEAD_ATTEMPTS = 4
+
+    /** Jeda dasar antar retry; dikali jumlah kegagalan. */
+    private const val ANALYSIS_HEAD_RETRY_MS = 2_500L
+
     /**
      * Pulls the analysis head for [uri] if needed and waits until enough of
      * the opening is on disk to align two versions of a track.
@@ -1786,7 +1822,7 @@ object AudioCache {
         if (videoId !in analysisHeadsInFlight) {
             analysisHeads.remove(videoId)
         }
-        requestAnalysisHead(opus)
+        requestAnalysisHead(opus, force = true)
         var rounds = 1
         var askedAt = SystemClock.elapsedRealtime()
         val deadline = askedAt + timeoutMs
@@ -1809,7 +1845,7 @@ object AudioCache {
                     // [MAX_ALIGNMENT_HEAD_ROUNDS] still bounds how often.
                     if (alignmentPrefixBytes(videoId) < MIN_ALIGNMENT_PREFIX_BYTES) {
                         analysisHeads.remove(videoId)
-                        requestAnalysisHead(opus)
+                        requestAnalysisHead(opus, force = true)
                         rounds++
                     }
                     askedAt = now
@@ -1860,7 +1896,7 @@ object AudioCache {
         )
     }
 
-    fun requestAnalysisHead(uri: Uri) {
+    fun requestAnalysisHead(uri: Uri, force: Boolean = false) {
         // Each of these gates used to stop a head dead with nothing in the
         // log to show for it: an unwired cache or upstream looked from the
         // outside exactly like a network that refuses everything.
@@ -1873,6 +1909,11 @@ object AudioCache {
             return
         }
         val videoId = uri.getQueryParameter("v") ?: return
+        // Round yang gagal boleh diulang, tapi tidak tiap tick: tunggu jedanya.
+        if (!force) {
+            val retryAt = analysisHeadRetryAt[videoId]
+            if (retryAt != null && SystemClock.elapsedRealtime() < retryAt) return
+        }
         // One round per track per session, and it is sized correctly up front
         // rather than grown into. See [analysisHeadSize] for why growing it was
         // the wrong shape.
@@ -1946,6 +1987,21 @@ object AudioCache {
                 }
             } finally {
                 analysisHeadsInFlight.remove(videoId)
+                if (alignmentPrefixBytes(videoId) >= MIN_ALIGNMENT_PREFIX_BYTES) {
+                    analysisHeadFailures.remove(videoId)
+                    analysisHeadRetryAt.remove(videoId)
+                } else {
+                    // Round gagal atau terlewat: lepaskan klaim "sekali per sesi"
+                    // setelah jeda, supaya tick analyzer berikutnya mencoba lagi
+                    // alih-alih membuat lagu berikutnya menunggu selamanya.
+                    val failures = (analysisHeadFailures[videoId] ?: 0) + 1
+                    analysisHeadFailures[videoId] = failures
+                    if (failures < MAX_ANALYSIS_HEAD_ATTEMPTS) {
+                        analysisHeadRetryAt[videoId] =
+                            SystemClock.elapsedRealtime() + ANALYSIS_HEAD_RETRY_MS * failures
+                        analysisHeads.remove(videoId)
+                    }
+                }
             }
         }
     }
@@ -2198,42 +2254,6 @@ object AudioCache {
                 .createDataSource(),
             uri,
         )
-
-    /**
-     * A random-access reader over [uri]'s cached bytes, for the analyzer to hand
-     * to [android.media.MediaExtractor]. Null when the rendition isn't fully
-     * cached yet — analysis always treats that as "not ready" rather than
-     * reading a partial file.
-     *
-     * The returned source only ever reads from disk: its upstream throws if
-     * touched at all, which should never happen once [isFullyCached] is true.
-     * Callers must [MediaDataSource.close] it.
-     */
-    fun mediaDataSource(uri: Uri): MediaDataSource? {
-        if (!isFullyCached(uri)) return null
-        return CacheMediaDataSource(cacheFactory(NoUpstream).createDataSource(), uri)
-    }
-
-    /**
-     * The same reader over a rendition that is still downloading, for Smart
-     * Fade's head-only pass.
-     *
-     * Nothing here truncates explicitly: a read into a region that hasn't
-     * arrived reaches [NoUpstream], which throws, and [CacheMediaDataSource]
-     * turns that into an end-of-stream. So a partially cached rendition presents
-     * itself to [android.media.MediaExtractor] as a short file that stops where
-     * the cache does, which is exactly what a head-only decode wants. Its
-     * declared size is still the real one, so a container whose header describes
-     * the whole track parses normally.
-     *
-     * Callers must check [cachedPrefixBytes] first — this only refuses the case
-     * where the rendition has no beginning on disk at all. Callers must
-     * [MediaDataSource.close] it.
-     */
-    fun headMediaDataSource(uri: Uri): MediaDataSource? {
-        if (cachedPrefixBytes(uri) <= 0L) return null
-        return CacheMediaDataSource(cacheFactory(NoUpstream).createDataSource(), uri)
-    }
 
     /**
      * Never fetches. For a fully cached rendition nothing should reach this; for

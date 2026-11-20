@@ -31,11 +31,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 /** Suspend API over Innertube. Every call returns a Result so the UI can show a real error. */
@@ -56,9 +57,12 @@ object YtMusicRepository {
     private val versionTimeMaps = ConcurrentHashMap<Pair<String, String>, VersionTimeMap>()
 
     fun cachedAudioVersion(videoId: String): Song? = audioVersionCache[videoId]
+
+    /** True bila pencarian versi audio untuk [videoId] sudah selesai dan memang tidak ada hasilnya. */
+    fun hasNoAudioVersion(videoId: String): Boolean = audioVersionCache[videoId]?.videoId == videoId
     fun cachedVideoVersion(videoId: String): Song? = videoVersionCache[videoId]
 
-    /** Switching [audioId] back to video returns to [video], the row it was converted from. */
+    /** Kembali dari [audioId] ke video berarti ke [video], baris asal konversinya. */
     fun rememberVideoVersion(audioId: String, video: Song) {
         videoVersionCache[audioId] = video
     }
@@ -299,7 +303,103 @@ object YtMusicRepository {
     private suspend fun shelvesOf(browseId: String): List<HomeShelf> =
         InnertubeParser.parseHome(Innertube.browse(browseId))
 
-    /** The server-defined mood and genre categories used by Explore. */
+    /** The charts page's shelves (top songs, trending and so on), for the lower half of Explore. */
+    suspend fun exploreCharts(): Result<List<HomeShelf>> = call("explore:charts") {
+        // Daftar single mulai dibuka begitu halaman New releases tiba, tanpa
+        // menunggu halaman Explore, Charts, dan Global yang berjalan paralel.
+        // Hasil tiap single dibagi lewat peta ini, jadi pemilihan akhir di bawah
+        // hanya membuka single yang belum sempat dibuka lebih awal.
+        val lookups = ConcurrentHashMap<String, Deferred<ShelfItem?>>()
+        val (pages, singleTracks) = coroutineScope {
+            fun lookup(single: ShelfItem): Deferred<ShelfItem?> =
+                lookups.computeIfAbsent(single.browseId!!) {
+                    async {
+                        // Satu halaman yang macet tidak boleh menahan seluruh daftar.
+                        withTimeoutOrNull(SINGLE_LOOKUP_TIMEOUT_MS) {
+                            runCatching { pageOf(Innertube.browse(single.browseId!!)).songs.firstOrNull() }
+                                .getOrNull()
+                                ?.takeUnless { it.isVideo }
+                                ?.let { song ->
+                                    ShelfItem(
+                                        title = song.title,
+                                        subtitle = song.artist.ifBlank {
+                                            InnertubeParser.artistFromSubtitle(single.subtitle)
+                                        },
+                                        thumbnailUrl = single.thumbnailUrl ?: song.thumbnailUrl,
+                                        videoId = song.videoId,
+                                        browseId = null,
+                                    )
+                                }
+                        }
+                    }
+                }
+            val regional = EXPLORE_BROWSE_IDS.map { id -> id to async { runCatching { shelvesOf(id) } } }
+            val global = async {
+                runCatching {
+                    InnertubeParser.parseHome(Innertube.browseCharts("ZZ"))
+                        .map { it.copy(title = "${it.title} (Global)") }
+                }
+            }
+            val newReleases = regional.first { it.first == NEW_RELEASES_BROWSE_ID }.second
+            async { latestSingleItems(newReleases.await().getOrDefault(emptyList())).forEach { lookup(it) } }
+            val pages = (regional.map { it.second } + global).awaitAll()
+            val tracks = latestSingleItems(mergeExploreShelves(pages))
+                .map { lookup(it) }
+                .awaitAll()
+                .filterNotNull()
+                .distinctBy { it.videoId }
+            pages to tracks
+        }
+        val shelves = mergeExploreShelves(pages)
+        if (shelves.isEmpty()) pages.firstNotNullOfOrNull { it.exceptionOrNull() }?.let { throw it }
+        // Apple Music's "Latest Songs". YouTube Music has no endpoint for new
+        // songs: New releases lists albums and singles, and its video tab lists
+        // music videos. So the list is the first track of each newest single,
+        // and chart songs only stand in when there are too few singles. A
+        // video is never passed off as a song.
+        val chartTracks = shelves.flatMap { it.items }
+            .filter { it.videoId != null && it.browseId == null && !it.isVideo }
+            .distinctBy { it.videoId }
+        val latest = singleTracks.takeIf { it.size >= 4 } ?: chartTracks
+        if (latest.size < 4) {
+            shelves
+        } else {
+            listOf(
+                HomeShelf(
+                    title = "Latest songs",
+                    items = latest.take(20),
+                    layout = com.miori.music.data.model.ShelfLayout.LIST,
+                ),
+            ) + shelves
+        }
+    }
+
+    /** The New tab reads new releases first, then YouTube's own Explore page, then the charts. */
+    private val EXPLORE_BROWSE_IDS = listOf("FEmusic_new_releases", "FEmusic_explore", "FEmusic_charts")
+
+    /** How many of the newest singles are opened to build the Latest songs list. */
+    private const val LATEST_SINGLES_LIMIT = 12
+
+    /** Waktu maksimal membuka satu halaman single untuk mengambil lagu pertamanya. */
+    private const val SINGLE_LOOKUP_TIMEOUT_MS = 6_000L
+
+    private const val NEW_RELEASES_BROWSE_ID = "FEmusic_new_releases"
+
+    private fun mergeExploreShelves(pages: List<Result<List<HomeShelf>>>): List<HomeShelf> = pages
+        .flatMap { it.getOrDefault(emptyList()) }
+        .filter { it.items.isNotEmpty() }
+        .distinctBy { it.title.trim().lowercase() }
+
+    private fun latestSingleItems(shelves: List<HomeShelf>): List<ShelfItem> = shelves
+        .flatMap { it.items }
+        .filter { item ->
+            item.browseId?.startsWith("MPREb") == true &&
+                item.subtitle.trim().startsWith("Single", ignoreCase = true)
+        }
+        .distinctBy { it.browseId }
+        .take(LATEST_SINGLES_LIMIT)
+
+    /** The server-defined mood and genre categories shown as the Search tab's categories. */
     suspend fun moodAndGenres(): Result<List<MoodGenreSection>> = call("moods-and-genres") {
         InnertubeParser.parseMoodAndGenres(Innertube.browse("FEmusic_moods_and_genres"))
     }
@@ -314,16 +414,31 @@ object YtMusicRepository {
         moodGenreShelfCache[key]?.let { return Result.success(it) }
         return call("mood-genre:$browseId") {
             InnertubeParser.parseHome(Innertube.browse(browseId, params))
-        }.also { result -> result.getOrNull()?.let { moodGenreShelfCache.putIfAbsent(key, it) } }
+        }.also { result ->
+            result.getOrNull()?.let {
+                // Hanya kategori yang dibuka pengguna yang masuk sini; dibatasi
+                // supaya shelf penuh tidak menumpuk di memori.
+                if (moodGenreShelfCache.size >= 12) moodGenreShelfCache.clear()
+                moodGenreShelfCache.putIfAbsent(key, it)
+            }
+        }
     }
 
     /** A category card borrows the first real cover from the playlists it opens. */
-    suspend fun moodGenreArtwork(browseId: String, params: String?): Result<String?> =
-        moodGenreShelves(browseId, params).map { shelves ->
+    suspend fun moodGenreArtwork(browseId: String, params: String?): Result<String?> {
+        fun firstCover(shelves: List<HomeShelf>): String? =
             shelves.asSequence().flatMap { it.items.asSequence() }
                 .mapNotNull(ShelfItem::thumbnailUrl)
                 .firstOrNull()
+
+        val key = "$browseId:${params.orEmpty()}"
+        moodGenreShelfCache[key]?.let { return Result.success(firstCover(it)) }
+        // Hanya satu URL yang dibutuhkan tile; shelf penuhnya tidak disimpan,
+        // jadi puluhan kategori tidak menahan puluhan shelf di memori.
+        return call("mood-genre-art:$browseId") {
+            firstCover(InnertubeParser.parseHome(Innertube.browse(browseId, params)))
         }
+    }
 
     /** One page of a search response, with the token for its next page if present. */
     data class SearchPage(
@@ -374,7 +489,30 @@ object YtMusicRepository {
      * field's typeahead. Unfiltered on purpose: a suggestion is a query, and
      * which tab it is then run against is the user's to pick afterwards.
      */
-    suspend fun searchSuggestions(input: String): Result<List<String>> =
+    /** Memo kecil berumur pendek: ketikan yang sama dalam beberapa menit tidak minta jaringan lagi. */
+    private class TimedMemo<T : Any>(private val max: Int, private val ttlMs: Long) {
+        private val map = object : LinkedHashMap<String, Pair<Long, T>>(max, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, T>>) = size > max
+        }
+
+        fun get(key: String): T? = synchronized(map) { map[key] }
+            ?.takeIf { System.currentTimeMillis() - it.first < ttlMs }?.second
+
+        fun put(key: String, value: T) {
+            synchronized(map) { map[key] = System.currentTimeMillis() to value }
+        }
+    }
+
+    private val suggestMemo = TimedMemo<List<String>>(64, 5 * 60_000L)
+    private val typeaheadMemo = TimedMemo<SearchPage>(32, 5 * 60_000L)
+
+    suspend fun searchSuggestions(input: String): Result<List<String>> {
+        val key = "${Innertube.cookie?.hashCode()}|${input.trim().lowercase()}"
+        suggestMemo.get(key)?.let { return Result.success(it) }
+        return searchSuggestionsNetwork(input).onSuccess { if (it.isNotEmpty()) suggestMemo.put(key, it) }
+    }
+
+    private suspend fun searchSuggestionsNetwork(input: String): Result<List<String>> =
         call("suggest") {
             InnertubeParser.parseSearchSuggestions(Innertube.searchSuggestions(input))
         }
@@ -391,7 +529,13 @@ object YtMusicRepository {
      * IME Search / tapping a suggestion) still use the normal authenticated
      * [searchPage] path and are recorded properly.
      */
-    suspend fun searchTypeahead(input: String): Result<SearchPage> =
+    suspend fun searchTypeahead(input: String): Result<SearchPage> {
+        val key = input.trim().lowercase()
+        typeaheadMemo.get(key)?.let { return Result.success(it) }
+        return searchTypeaheadNetwork(input).onSuccess { typeaheadMemo.put(key, it) }
+    }
+
+    private suspend fun searchTypeaheadNetwork(input: String): Result<SearchPage> =
         call("typeahead:$input") {
             InnertubeParser.parseSearchPage(
                 Innertube.searchTypeahead(input),
@@ -420,12 +564,8 @@ object YtMusicRepository {
      *
      * Returns [song] unchanged when it isn't a video, or when nothing better
      * turns up — playing the video's own audio track beats guessing at a
-     * substitute. It only runs when asked for: the player's switch, or the
-     * music-only setting, never otherwise as part of queueing or playback.
-     *
-     * "Nothing turned up" is only remembered when the searches actually
-     * answered. A search that failed says nothing about the song, and caching
-     * it left the track on its video for the rest of the session.
+     * substitute. This is deliberately an explicit action from the player,
+     * never part of normal queueing or playback.
      *
      * [search] already drops video rows from its results (see
      * [InnertubeParser.parseSearch]), so every candidate here is audio-only
@@ -439,10 +579,11 @@ object YtMusicRepository {
             return audio
         }
         val target = TrackMatcher.targetOf(song)
-        var searchFailed = false
+        var lookupFailed = false
         for (query in TrackMatcher.queries(target)) {
-            val candidates = search(query, SearchFilter.SONGS)
-                .onFailure { searchFailed = true }
+            val searched = search(query, SearchFilter.SONGS)
+            if (searched.isFailure) lookupFailed = true
+            val candidates = searched
                 .getOrNull()
                 ?.filterIsInstance<SearchResult.Track>()
                 ?.map { it.song }
@@ -462,7 +603,9 @@ object YtMusicRepository {
             }
         }
         Log.w(TAG, "audio switch: no official song match for '${song.title}' by '${song.artist}'")
-        if (!searchFailed) audioVersionCache[song.videoId] = song
+        // Jawaban "tidak ada" hanya disimpan bila semua pencarian berhasil dijalankan;
+        // kalau ada yang gagal (mis. jaringan), biarkan bisa dicoba lagi.
+        if (!lookupFailed) audioVersionCache[song.videoId] = song
         return song
     }
 
@@ -723,6 +866,11 @@ object YtMusicRepository {
          * continuation, same as [header].
          */
         val description: String? = null,
+        /**
+         * Shelf rekomendasi di akhir halaman album ("You might also like", dst.), dibaca
+         * dari respons album asli. Kosong untuk playlist dan untuk continuation.
+         */
+        val related: List<HomeShelf> = emptyList(),
     )
 
     /**
@@ -760,11 +908,32 @@ object YtMusicRepository {
      */
     private suspend fun albumPageOf(albumResponse: JsonObject): SongPage {
         val metadata = pageOf(albumResponse)
-        val playlist = albumPlaylistOf(albumResponse, metadata.songs.size) ?: return metadata
-        return pageOf(playlist).copy(
+        // Dibaca dari respons album, bukan dari playlist pengganti di bawah: hanya
+        // halaman album yang membawa carousel rekomendasinya.
+        val related = InnertubeParser.parseRelatedShelves(albumResponse)
+        val playlist = albumPlaylistOf(albumResponse, metadata.songs.size)
+            ?: return metadata.copy(related = related)
+        // Baris playlist pengganti tidak membawa jumlah putar; hanya baris album
+        // yang punya. Dipindahkan per videoId supaya titik lagu populer tetap muncul.
+        val playCounts = metadata.songs
+            .mapNotNull { song -> song.playCount?.let { song.videoId to it } }
+            .toMap()
+        val playlistPage = pageOf(playlist).let { page ->
+            if (playCounts.isEmpty()) {
+                page
+            } else {
+                page.copy(
+                    songs = page.songs.map { song ->
+                        playCounts[song.videoId]?.let { song.copy(playCount = it) } ?: song
+                    },
+                )
+            }
+        }
+        return playlistPage.copy(
             library = metadata.library,
             header = metadata.header,
             description = metadata.description,
+            related = related,
         )
     }
 

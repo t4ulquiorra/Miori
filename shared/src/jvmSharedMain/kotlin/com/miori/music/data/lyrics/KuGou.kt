@@ -3,7 +3,6 @@ package com.miori.music.data.lyrics
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerialName
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import java.util.Base64
 import kotlin.math.abs

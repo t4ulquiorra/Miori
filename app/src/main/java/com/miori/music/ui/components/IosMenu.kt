@@ -2,12 +2,12 @@ package com.miori.music.ui.components
 
 import android.provider.Settings
 import com.miori.music.ui.player.PlayerBackHandler
-import com.miori.music.ui.player.additiveChrome
 import com.miori.music.ui.utils.containSheetGestures
 import com.miori.music.ui.components.backdrop.Backdrop
 import com.miori.music.ui.components.backdrop.drawBackdrop
 import com.miori.music.ui.components.backdrop.effects.blur
 import com.miori.music.ui.components.backdrop.effects.colorControls
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -40,6 +40,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -59,7 +60,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -71,9 +71,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.miori.music.data.settings.AppSettings
 import com.miori.music.ui.components.backdrop.backdrops.SnapshotBackdrop
@@ -104,18 +104,10 @@ private val DarkMenu = IosMenuColors(
     dark = true,
     fill = Color(0xFF1C1C1E),
     rim = Color.White.copy(alpha = 0.10f),
-    // Below full strength for [additiveChrome], which both panels draw their
-    // rows through here: solid white would stay solid white under it.
-    label = Color.White.copy(alpha = 0.75f),
-    secondaryLabel = Color.White.copy(alpha = 0.60f),
-    separator = Color.White.copy(alpha = 0.10f),
-    pressed = Color.White.copy(alpha = 0.10f),
-)
-
-/** [DarkMenu] with "Disable blend effects" on: the rows laid over the frost at full strength again. */
-private val PlainDarkMenu = DarkMenu.copy(
     label = Color.White,
     secondaryLabel = Color.White.copy(alpha = 0.70f),
+    separator = Color.White.copy(alpha = 0.10f),
+    pressed = Color.White.copy(alpha = 0.10f),
 )
 
 private val LightMenu = IosMenuColors(
@@ -130,14 +122,8 @@ private val LightMenu = IosMenuColors(
 
 /** The panel colours for the theme in force. */
 @Composable
-fun iosMenuColors(): IosMenuColors {
-    val plain by AppSettings.disableBlendEffects.collectAsStateWithLifecycle()
-    return when {
-        MaterialTheme.colorScheme.background.luminance() >= 0.5f -> LightMenu
-        plain -> PlainDarkMenu
-        else -> DarkMenu
-    }
-}
+fun iosMenuColors(): IosMenuColors =
+    if (MaterialTheme.colorScheme.background.luminance() < 0.5f) DarkMenu else LightMenu
 
 /** The panel's silhouette: a large, continuously curved corner. */
 val IosMenuShape: Shape = RoundedCornerShape(30.dp).continuous()
@@ -172,16 +158,17 @@ fun Modifier.iosMenuPanel(
     rimOverride: Color? = null,
     /** False where the caller casts [iosMenuShadow] itself, apart from the panel. */
     castsShadow: Boolean = true,
+    /** Opasitas slab di atas frost (0..1); null memakai bawaan menu. */
+    frostAlpha: Float? = null,
+    /** Menambah rim Liquid Glass app di tepi panel. */
+    glassRim: Boolean = false,
 ): Modifier {
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
-    val plain by AppSettings.disableBlendEffects.collectAsStateWithLifecycle()
     val blurs = translucent && !reduceDynamicBlur
     val backdropFrost = blurs && backdrop != null && isGlassSupported()
     val hazeFrost = blurs && !backdropFrost && hazeState != null
     val fill = fillOverride ?: if (backdropFrost || hazeFrost) {
-        // Thinner on a dark panel while its rows are blended, which takes them
-        // further into the colour behind; plain rows want the denser slab back.
-        colors.fill.copy(alpha = if (!colors.dark) 0.72f else if (plain) 0.80f else 0.60f)
+        colors.fill.copy(alpha = frostAlpha ?: if (colors.dark) 0.80f else 0.72f)
     } else {
         colors.fill
     }
@@ -194,9 +181,13 @@ fun Modifier.iosMenuPanel(
     } else {
         shadowed.clip(IosMenuShape).background(fill)
     }
-    return surface
-        .clip(IosMenuShape)
-        .border(0.5.dp, rimOverride ?: colors.rim, IosMenuShape)
+    val clipped = surface.clip(IosMenuShape)
+    val rimmed = if (glassRim) {
+        clipped.liquidGlassRim(RoundedCornerShape(30.dp).continuous())
+    } else {
+        clipped
+    }
+    return rimmed.border(0.5.dp, rimOverride ?: colors.rim, IosMenuShape)
 }
 
 /** The shadow the menu panel casts. */
@@ -234,6 +225,21 @@ private const val MENU_BACKDROP_SCALE = 0.25f
 
 /** The longest a menu waits for its frost's still before growing without it. */
 private const val STILL_WAIT_MS = 150L
+
+/** Where [IosMenuPopover] settles relative to the button that opened it. */
+enum class IosMenuPlacement {
+    /** Trailing edge on the anchor's, docked to the bottom or hung down from the top. */
+    Auto,
+
+    /** Leading edge on the anchor's, sitting just above it. */
+    AboveStart,
+
+    /** Leading edge on the anchor's, hanging just below it. */
+    BelowStart,
+
+    /** Trailing edge on the anchor's, hanging just below it. */
+    BelowEnd,
+}
 
 /** The break between groups: a hairline inset from the panel's edges, with air either side. */
 @Composable
@@ -280,12 +286,14 @@ fun RowScope.IosMenuQuickAction(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val color = if (enabled) colors.label else colors.secondaryLabel
+    val touch = LocalIosMenuTouch.current
     Column(
         modifier = Modifier
             .weight(1f)
             .fillMaxHeight()
+            .iosMenuTouchTarget(enabled, 16.dp, onClick)
             .clip(RoundedCornerShape(16.dp))
-            .background(if (pressed) colors.pressed else Color.Transparent)
+            .background(if (pressed && touch == null) colors.pressed else Color.Transparent)
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick)
             .padding(horizontal = 4.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -330,6 +338,8 @@ fun IosMenuRow(
     labelColor: Color? = null,
     valueColor: Color? = null,
     enabled: Boolean = true,
+    /** Baris lebih rapat (tinggi minimum 36dp) untuk menu pendek. */
+    compact: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val colors = iosMenuColors()
@@ -337,12 +347,14 @@ fun IosMenuRow(
     val pressed by interaction.collectIsPressedAsState()
     val alpha = if (enabled) 1f else 0.4f
     val foreground = labelColor ?: colors.label
+    val touch = LocalIosMenuTouch.current
     Row(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp)
+            .iosMenuTouchTarget(enabled, 14.dp, onClick)
             .clip(RoundedCornerShape(14.dp))
-            .background(if (pressed) colors.pressed else Color.Transparent)
+            .background(if (pressed && touch == null) colors.pressed else Color.Transparent)
             .then(
                 if (onClick != null) {
                     Modifier.clickable(
@@ -355,8 +367,13 @@ fun IosMenuRow(
                     Modifier
                 },
             )
-            .heightIn(min = 44.dp)
-            .padding(start = 12.dp, end = 14.dp, top = 11.dp, bottom = 11.dp),
+            .heightIn(min = if (compact) 36.dp else 44.dp)
+            .padding(
+                start = 12.dp,
+                end = 14.dp,
+                top = if (compact) 7.dp else 11.dp,
+                bottom = if (compact) 7.dp else 11.dp,
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.width(28.dp), contentAlignment = Alignment.Center) {
@@ -364,7 +381,7 @@ fun IosMenuRow(
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = (iconTint ?: foreground).let { it.copy(alpha = it.alpha * alpha) },
+                    tint = (iconTint ?: foreground).copy(alpha = alpha),
                     modifier = Modifier.size(21.dp),
                 )
             }
@@ -373,7 +390,7 @@ fun IosMenuRow(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
                 text = label,
-                color = foreground.copy(alpha = foreground.alpha * alpha),
+                color = foreground.copy(alpha = alpha),
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontSize = 17.sp,
                     lineHeight = 21.sp,
@@ -397,7 +414,7 @@ fun IosMenuRow(
             Spacer(Modifier.width(10.dp))
             Text(
                 text = value,
-                color = (valueColor ?: colors.secondaryLabel).let { it.copy(alpha = it.alpha * alpha) },
+                color = (valueColor ?: colors.secondaryLabel).copy(alpha = alpha),
                 fontSize = 15.sp,
                 maxLines = 1,
             )
@@ -433,6 +450,15 @@ fun <T : Any> IosMenuPopover(
     onDismiss: () -> Unit,
     backdrop: Backdrop? = null,
     hazeState: HazeState? = null,
+    placement: IosMenuPlacement = IosMenuPlacement.Auto,
+    dimBackground: Boolean = true,
+    /** Menambah rim Liquid Glass app di tepi panel. */
+    glassRim: Boolean = false,
+    frostAlpha: Float? = null,
+    /** Shifts an [IosMenuPlacement.AboveStart] panel sideways from the anchor's leading edge; negative is left. */
+    startOffset: Dp = 0.dp,
+    /** Panel lebih pendek: padding atas-bawah panel dikurangi. */
+    compact: Boolean = false,
     content: @Composable (T) -> Unit,
 ) {
     var last by remember { mutableStateOf<Pair<T, Rect?>?>(null) }
@@ -454,6 +480,9 @@ fun <T : Any> IosMenuPopover(
     val reduceMotion = appReduceAnimation || systemAnimationsOff
 
     val progress = remember { Animatable(0f) }
+    // The same window morph the alerts use: the panel grows out of the ⋮ or ⋯
+    // that opened it and folds back into it.
+    val morphSpec = remember { MacOSPopupSpec() }
     LaunchedEffect(open) {
         if (open) {
             // The opening frame is the heaviest the menu has: every row
@@ -478,12 +507,15 @@ fun <T : Any> IosMenuPopover(
                 if (reduceMotion) {
                     tween(durationMillis = 120, easing = LinearEasing)
                 } else {
-                    // Critically damped: it settles without overshooting.
-                    spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 600f)
+                    morphSpec.openSpring
                 },
             )
         } else {
-            progress.animateTo(0f, tween(durationMillis = if (reduceMotion) 100 else 170, easing = FastOutSlowInEasing))
+            if (reduceMotion) {
+                progress.animateTo(0f, tween(durationMillis = 100, easing = FastOutSlowInEasing))
+            } else {
+                progress.animateTo(0f, morphSpec.closeSpring)
+            }
             last = null
         }
     }
@@ -493,8 +525,9 @@ fun <T : Any> IosMenuPopover(
     PlayerBackHandler(enabled = open, onBack = onDismiss)
 
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val plain by AppSettings.disableBlendEffects.collectAsStateWithLifecycle()
     val scrim = Color.Black.copy(alpha = if (dark) 0.30f else 0.14f)
+    val touch = rememberIosMenuTouch(reduceMotion)
+    val pressedColor = iosMenuColors().pressed
     val insets = WindowInsets.safeDrawing
     var overlayOffset by remember { mutableStateOf(Offset.Zero) }
 
@@ -511,7 +544,7 @@ fun <T : Any> IosMenuPopover(
                 Modifier
                     .fillMaxSize()
                     .graphicsLayer { alpha = progress.value.coerceIn(0f, 1f) }
-                    .background(scrim)
+                    .background(if (dimBackground) scrim else Color.Transparent)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -537,7 +570,10 @@ fun <T : Any> IosMenuPopover(
                         backdrop = backdrop,
                         hazeState = hazeState,
                         castsShadow = false,
-                    ),
+                        frostAlpha = frostAlpha,
+                        glassRim = glassRim,
+                    )
+                    .touchGlow(),
                 propagateMinConstraints = true,
             ) {
                 // The rows in a layer of their own. The frost under them is
@@ -546,21 +582,38 @@ fun <T : Any> IosMenuPopover(
                 // in the same layer, every label and glyph went with it, each
                 // frame at a new scale: rasterized again and uploaded again on
                 // the render thread. Apart, they are drawn once, full size,
-                // and only scaled. On a dark panel that layer is the blend's
-                // own, added onto the frost; on a light one it would wash the
-                // dark labels out, so it stays plain.
+                // and only scaled.
                 Column(
                     Modifier
-                        .then(
-                            if (dark && !plain) {
-                                Modifier.additiveChrome(true)
+                        // A row that changes height once its data arrives (a loading
+                        // row gaining its second line, a row dropping out) eases the
+                        // panel to its new size instead of snapping it.
+                        .animateContentSize(
+                            animationSpec = if (reduceMotion) {
+                                tween(durationMillis = 0)
                             } else {
-                                Modifier.graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                                spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMediumLow,
+                                )
                             },
                         )
-                        .padding(vertical = 8.dp),
+                        .graphicsLayer {
+                            compositingStrategy = CompositingStrategy.Offscreen
+                            // The rows fade in once the panel has grown, and out before it folds.
+                            if (!reduceMotion) {
+                                val span = (morphSpec.contentFadeEnd - morphSpec.contentFadeStart).coerceAtLeast(0.01f)
+                                alpha = ((progress.value - morphSpec.contentFadeStart) / span).coerceIn(0f, 1f)
+                            }
+                        }
+                        .iosMenuTouchHost(touch, pressedColor)
+                        .padding(vertical = if (compact) 5.dp else 8.dp),
                 ) {
-                    content(menuItem)
+                    IosMenuScrollEnvironment(touch) {
+                        CompositionLocalProvider(LocalMenuBackdrop provides backdrop) {
+                            content(menuItem)
+                        }
+                    }
                 }
             }
         },
@@ -578,28 +631,58 @@ fun <T : Any> IosMenuPopover(
         )
         val shadowPlate = measurables[1].measure(Constraints.fixed(panel.width, panel.height))
         val anchorBounds = menuAnchor?.translate(-overlayOffset)
+        val above = placement == IosMenuPlacement.AboveStart && anchorBounds != null
+        val below = (placement == IosMenuPlacement.BelowStart || placement == IosMenuPlacement.BelowEnd) &&
+            anchorBounds != null
         val right = anchorBounds?.right?.roundToInt() ?: (width - margin)
-        val panelX = (right - panel.width)
-            .coerceIn(margin, (width - margin - panel.width).coerceAtLeast(margin))
+        val startX = when {
+            above && anchorBounds != null -> anchorBounds.left.roundToInt() + startOffset.roundToPx()
+            below && placement == IosMenuPlacement.BelowStart -> anchorBounds!!.left.roundToInt()
+            else -> right - panel.width
+        }
+        // Menu di atas tombol (AboveStart): batas kiri dihitung di ruang window, bukan
+        // di ruang overlay. Overlay yang sudah mepet tombol membuat margin 14dp
+        // mendorong menu ke kanan dari tepi kiri tombol.
+        val minX = if (above || below) margin - overlayOffset.x.roundToInt() else margin
+        val panelX = startX
+            .coerceIn(minX, (width - margin - panel.width).coerceAtLeast(minX))
         val lowest = (bottom - panel.height).coerceAtLeast(top)
-        val hangsDown = anchorBounds != null && anchorBounds.center.y < height / 2f
-        val panelY = if (hangsDown) anchorBounds.top.roundToInt().coerceIn(top, lowest) else lowest
+        val hangsDown = !above && !below && anchorBounds != null && anchorBounds.center.y < height / 2f
+        val panelY = when {
+            above && anchorBounds != null ->
+                (anchorBounds.top.roundToInt() - 10.dp.roundToPx() - panel.height).coerceIn(top, lowest)
+            below -> (anchorBounds!!.bottom.roundToInt() + 10.dp.roundToPx()).coerceIn(top, lowest)
+            hangsDown -> anchorBounds!!.top.roundToInt().coerceIn(top, lowest)
+            else -> lowest
+        }
 
-        val growth: GraphicsLayerScope.() -> Unit = {
+        val cardRect = Rect(
+            panelX.toFloat(),
+            panelY.toFloat(),
+            (panelX + panel.width).toFloat(),
+            (panelY + panel.height).toFloat(),
+        )
+        // With no button to grow from, the panel grows out of its own corner.
+        val originRect = anchorBounds ?: Rect(
+            cardRect.right - 44.dp.toPx(),
+            cardRect.bottom - 44.dp.toPx(),
+            cardRect.right,
+            cardRect.bottom,
+        )
+        val growth: GraphicsLayerScope.(Boolean) -> Unit = { clipToMorph ->
             val p = progress.value
-            alpha = (p * 2.5f).coerceIn(0f, 1f)
-            if (!reduceMotion) {
-                transformOrigin = TransformOrigin(1f, if (hangsDown) 0f else 1f)
-                val scale = lerp(0.3f, 1f, p)
-                scaleX = scale
-                scaleY = scale
+            if (reduceMotion) {
+                alpha = (p * 2.5f).coerceIn(0f, 1f)
+            } else {
+                applyMacOSMorph(morphSpec, p, originRect, cardRect, 30.dp.toPx(), clipToMorph)
+                applyIosMenuJelly(touch, 1f, 0.5f, 0.5f)
             }
         }
         layout(width, height) {
             scrimPlaceable.place(0, 0)
-            shadowPlate.placeWithLayer(panelX, panelY, layerBlock = growth)
+            shadowPlate.placeWithLayer(panelX, panelY) { growth(false) }
             panel.placeWithLayer(panelX, panelY) {
-                growth()
+                growth(true)
                 // Drawn full size into a layer of its own, and only that
                 // picture scaled. Scaled as it was drawn, the panel's
                 // continuous corners — a path, not a rounded rect — were

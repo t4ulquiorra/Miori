@@ -72,7 +72,7 @@ jobs:
         path: app/build/outputs/apk/prod/release/*.apk
 
     - name: Upload Wear OS APK Artifact
-      if: ${{ inputs.arch == 'all' }}
+      if: ${{ inputs.arch == 'all' && hashFiles('wearos/**') != '' }}
       uses: actions/upload-artifact@v4
       with:
         name: miori-wear-prod-release-signed

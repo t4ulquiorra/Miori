@@ -18,12 +18,12 @@ import com.miori.music.data.YtMusicRepository
 import com.miori.music.data.TopPicks
 import com.miori.music.data.AppleArtistPhotos
 import com.miori.music.data.model.ArtistRef
+import com.miori.music.data.model.MOST_PLAYED_BROWSE_ID
 import com.miori.music.data.model.TopPick
 import com.miori.music.data.stats.ListeningStats
 import com.miori.music.data.stats.ReplayPeriod
 import android.util.Log
 import java.io.File
-import java.time.LocalDate
 import java.time.LocalDateTime
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.first
@@ -78,7 +78,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -97,7 +96,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import com.miori.music.data.sources.AddonSource
-import com.miori.music.data.sources.SourceKind
 import com.miori.music.data.sources.SourceRegistry
 import com.miori.music.data.sources.SourceResolver
 import com.miori.music.data.sources.TrackMatcher
@@ -170,8 +168,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val topPicksLoading: StateFlow<Boolean> = _topPicksLoading.asStateFlow()
     private var topPicksJob: Job? = null
 
+    /** Top Picks has been built during this app session; the first open of a session always rebuilds it. */
+    private var topPicksBuiltThisSession = false
+
     private val _explore = MutableStateFlow<UiState<List<MoodGenreSection>>>(UiState.Loading)
     val explore: StateFlow<UiState<List<MoodGenreSection>>> = _explore.asStateFlow()
+
+    private val _exploreCharts = MutableStateFlow<UiState<List<HomeShelf>>>(UiState.Loading)
+    val exploreCharts: StateFlow<UiState<List<HomeShelf>>> = _exploreCharts.asStateFlow()
 
     private val _selectedMoodGenre = MutableStateFlow<MoodGenre?>(null)
     val selectedMoodGenre: StateFlow<MoodGenre?> = _selectedMoodGenre.asStateFlow()
@@ -414,6 +418,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         manualLyricsJobs.values.forEach(Job::cancel)
         manualLyricsJobs.clear()
         lyricsProviderResults.clear()
+        manualSearchJob?.cancel()
+        _manualLyricsState.value = ManualLyricsSearchState.IDLE
         _lyricsProviderStates.value =
             LyricsSource.entries.associateWith { LyricsProviderState.NOT_FETCHED }
         _lyrics.value = null
@@ -502,12 +508,59 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 sources = setOf(source),
                 order = listOf(source),
                 prioritizeSyllableSync = false,
+                usePinned = false,
                 onSourceStarted = { provider -> providerStarted(generation, provider) },
                 onSourceResult = { provider, result ->
                     providerFinished(generation, provider, result)
                 },
                 onSourceCancelled = { provider -> providerCancelled(generation, provider) },
             )
+        }
+    }
+
+    /** Where the "search with another title" request for the current track stands. */
+    private val _manualLyricsState = MutableStateFlow(ManualLyricsSearchState.IDLE)
+    val manualLyricsState: StateFlow<ManualLyricsSearchState> = _manualLyricsState.asStateFlow()
+    private var manualSearchJob: Job? = null
+
+    /**
+     * Looks the playing track up again under a title and artist typed by the
+     * user, for songs a database only knows by another name. Asks every enabled
+     * source; no video id is passed, so nothing is cached under this track's id
+     * and no id-keyed source can answer for a different recording. A hit
+     * replaces the lyrics on screen until the track changes.
+     */
+    fun searchLyricsManually(title: String, artist: String) {
+        val request = currentLyricsRequest ?: return
+        val query = title.trim()
+        if (query.isEmpty()) return
+        val generation = lyricsGeneration
+        manualSearchJob?.cancel()
+        _manualLyricsState.value = ManualLyricsSearchState.SEARCHING
+        manualSearchJob = viewModelScope.launch {
+            val found = LyricsRepository.lyrics(
+                videoId = "",
+                title = query,
+                artist = artist.trim(),
+                durationMs = request.durationMs,
+                album = null,
+                sources = AppSettings.lyricsSources.value.ifEmpty { LyricsSource.offered.toSet() },
+                order = AppSettings.lyricsSourceOrder.value,
+                prioritizeSyllableSync = AppSettings.prioritizeSyllableSync.value,
+            )
+            if (generation != lyricsGeneration) return@launch
+            if (found == null) {
+                _manualLyricsState.value = ManualLyricsSearchState.NOT_FOUND
+                return@launch
+            }
+            // The automatic lookup must not land afterwards and overwrite this.
+            lyricsJob?.cancel()
+            manualLyricsJobs.values.forEach(Job::cancel)
+            manualLyricsJobs.clear()
+            selectedLyricsSource = null
+            LyricsRepository.pin(request.videoId, found)
+            showLyricsResult(found)
+            _manualLyricsState.value = ManualLyricsSearchState.FOUND
         }
     }
 
@@ -555,7 +608,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private val _account = MutableStateFlow<Account?>(null)
-    val account: StateFlow<Account?> = _account.asStateFlow()
+    /**
+     * Akun yang tampil di seluruh aplikasi: data Google, dengan nama/foto buatan
+     * pengguna di atasnya bila ada (lihat [AppSettings.profileOverride]).
+     */
+    val account: StateFlow<Account?> = combine(_account, AppSettings.profileOverride) { raw, override ->
+        applyProfileOverride(raw, override)
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        applyProfileOverride(_account.value, AppSettings.profileOverride.value),
+    )
+
+    private fun applyProfileOverride(raw: Account?, override: AppSettings.ProfileOverride): Account? {
+        raw ?: return null
+        if (override.name.isBlank() && override.photoPath.isBlank()) return raw
+        if (override.owner != AppSettings.profileOwnerOf(raw.email)) return raw
+        val photo = override.photoPath
+            .takeIf { it.isNotEmpty() && File(it).exists() }
+            ?.let { "file://$it" }
+        return raw.copy(
+            name = override.name.ifBlank { raw.name },
+            thumbnailUrl = photo ?: raw.thumbnailUrl,
+        )
+    }
 
     /**
      * The channels this login can act as. Empty until the picker asks for
@@ -927,7 +1003,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val identity = listenerKey()
         _playlistsLoading.value = true
         viewModelScope.launch {
-            YtMusicRepository.userPlaylists().onSuccess { if (identity == listenerKey()) _playlists.value = it }
+            YtMusicRepository.userPlaylists().onSuccess { list ->
+                if (identity == listenerKey()) {
+                    val cover = com.miori.music.data.PlaylistCovers.lookup(getApplication<Application>())
+                    _playlists.value = list.map { p ->
+                        cover(p.playlistId)?.let { p.copy(thumbnailUrl = it) } ?: p
+                    }
+                }
+            }
             if (identity == listenerKey()) _playlistsLoading.value = false
         }
     }
@@ -1011,9 +1094,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         song: Song,
         onResult: (added: Int, alreadyThere: Int, failed: Int) -> Unit = { _, _, _ -> },
     ) {
-        if (!requireSignIn() || playlists.isEmpty()) return
+        if (playlists.isEmpty()) return
+        // Playlists kept on this device need no account; only the rest do.
+        val (local, remote) = playlists.partition { it.playlistId.startsWith("sp_local_") }
+        if (remote.isNotEmpty() && !requireSignIn()) return
         viewModelScope.launch {
-            val outcomes = playlists.map { addOne(it, song) }
+            val outcomes = local.map { addToLocalPlaylist(it, song) } + remote.map { addOne(it, song) }
             onResult(
                 outcomes.count { it == AddOutcome.ADDED },
                 outcomes.count { it == AddOutcome.ALREADY_THERE },
@@ -1023,6 +1109,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private enum class AddOutcome { ADDED, ALREADY_THERE, FAILED }
+
+    private fun addToLocalPlaylist(playlist: UserPlaylist, song: Song): AddOutcome =
+        if (com.miori.music.data.spotify.LocalPlaylistStore.addSong(playlist.playlistId, song)) {
+            AddOutcome.ADDED
+        } else {
+            AddOutcome.ALREADY_THERE
+        }
 
     private suspend fun addOne(playlist: UserPlaylist, song: Song): AddOutcome {
         val openSongs = (_detailStack.value.firstOrNull { it.browseId == playlist.browseId }
@@ -1048,7 +1141,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * track's menu — one request, so it can't half-succeed into an empty
      * playlist the user has to add to again.
      */
-    fun createPlaylist(title: String, privacy: PlaylistPrivacy, song: Song? = null) {
+    fun createPlaylist(
+        title: String,
+        privacy: PlaylistPrivacy,
+        song: Song? = null,
+        cover: android.net.Uri? = null,
+        onCreated: ((UserPlaylist) -> Unit)? = null,
+    ) {
         if (!requireSignIn()) return
         val name = title.trim().ifBlank { text(R.string.new_playlist) }
         viewModelScope.launch {
@@ -1064,6 +1163,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // after someone holds it.
                     setPlaylistOwned("VL$playlistId", true)
                     libraryStale = true
+                    val coverUrl = cover?.let {
+                        com.miori.music.data.PlaylistCovers.save(getApplication<Application>(), playlistId, it)
+                    }
                     val created = UserPlaylist(
                         playlistId = playlistId,
                         title = name,
@@ -1072,7 +1174,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         // unseeded playlist gets a card of just its name rather
                         // than a guess at what the feed will call it.
                         subtitle = if (song != null) "1 song" else "",
-                        thumbnailUrl = song?.thumbnailUrl,
+                        thumbnailUrl = coverUrl ?: song?.thumbnailUrl,
                     )
                     // Drawn from what was just sent rather than waited for: the
                     // library feed does not have this playlist yet, and the
@@ -1092,6 +1194,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             ),
                         ) + items.filterNot { it.browseId == created.browseId }
                     }
+                    onCreated?.invoke(created)
                 },
                 onFailure = {},
             )
@@ -1284,6 +1387,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 },
                 onFailure = {},
             )
+        }
+    }
+
+    /**
+     * Mengganti cover playlist dengan gambar dari galeri, atau menghapusnya
+     * ([cover] null). Dinyatakan di semua tempat playlist digambar: picker,
+     * kartu Library, dan halamannya sendiri.
+     */
+    fun setPlaylistCover(playlist: UserPlaylist, cover: android.net.Uri?) {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val url = if (cover != null) {
+                com.miori.music.data.PlaylistCovers.save(app, playlist.playlistId, cover)
+                    ?: return@launch
+            } else {
+                com.miori.music.data.PlaylistCovers.remove(app, playlist.playlistId)
+                null
+            }
+            _playlists.value = _playlists.value.map {
+                if (it.playlistId == playlist.playlistId) it.copy(thumbnailUrl = url) else it
+            }
+            editPlaylistShelf { items ->
+                items.map { if (it.browseId == playlist.browseId) it.copy(thumbnailUrl = url) else it }
+            }
+            _detailStack.value = _detailStack.value.map {
+                if (it.browseId == playlist.browseId) it.copy(thumbnailUrl = url) else it
+            }
+            // Tanpa cover kustom, thumbnail aslinya baru kembali dari feed.
+            if (cover == null) libraryStale = true
         }
     }
 
@@ -1498,6 +1630,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         viewModelScope.launch {
+            // A hidden row is never fetched; turning it back on fetches it then.
+            AppSettings.hideHomeRecents.drop(1).collect { hidden ->
+                if (!hidden) loadHomeRecents(listenerKey(), homeLoadGeneration.get())
+            }
+        }
+        viewModelScope.launch {
+            AppSettings.hideHomeTopPicks.drop(1).collect { hidden ->
+                if (!hidden) loadTopPicks(listenerKey(), rebuild = false)
+            }
+        }
+        viewModelScope.launch {
             combine(
                 AppSettings.smbHost,
                 AppSettings.smbShare,
@@ -1606,19 +1749,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val identity = listenerKey()
         _refreshing.value = _refreshing.value + feed
         viewModelScope.launch {
-            when (feed) {
-                Feed.HOME -> refreshHome(identity)
-                Feed.EXPLORE -> fetchExplore()
-                Feed.LIBRARY -> fetchLibrary(identity)
+            try {
+                when (feed) {
+                    Feed.HOME -> refreshHome(identity)
+                    Feed.EXPLORE -> fetchExplore()
+                    Feed.LIBRARY -> fetchLibrary(identity)
+                }
+            } finally {
+                _refreshing.value = _refreshing.value - feed
             }
-            _refreshing.value = _refreshing.value - feed
         }
     }
 
     fun loadExplore() {
         exploreRequested = true
         _explore.value = UiState.Loading
-        viewModelScope.launch { fetchExplore() }
+        // Charts yang sudah diambil lebih awal (lihat prefetchExploreCharts) dipakai apa adanya.
+        val chartsReady = _exploreCharts.value is UiState.Success
+        if (!chartsReady) _exploreCharts.value = UiState.Loading
+        viewModelScope.launch { fetchExplore(fetchCharts = !chartsReady) }
+    }
+
+    private var exploreChartsJob: kotlinx.coroutines.Job? = null
+
+    /** Satu pengambilan charts pada satu waktu, baik dari prefetch maupun dari tab. */
+    private fun startExploreCharts() {
+        if (exploreChartsJob?.isActive == true) return
+        exploreChartsJob = viewModelScope.launch { fetchExploreCharts() }
+    }
+
+    /**
+     * Dipanggil sesaat setelah peluncuran: hanya charts New, tanpa grid mood dan
+     * puluhan request artwork-nya, supaya tidak bersaing dengan Home.
+     */
+    fun prefetchExploreCharts() {
+        if (exploreRequested) return
+        startExploreCharts()
     }
 
     private var exploreRequested = false
@@ -1628,13 +1794,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!exploreRequested) loadExplore()
     }
 
-    private suspend fun fetchExplore() {
+    /** Explore's charts shelves. A failed refresh keeps what is already on the page. */
+    private suspend fun fetchExploreCharts() {
+        YtMusicRepository.exploreCharts()
+            .onSuccess { shelves ->
+                val usable = shelves.filter { it.items.isNotEmpty() }
+                _exploreCharts.value = if (usable.isEmpty()) {
+                    UiState.Error(text(R.string.nothing_to_explore))
+                } else {
+                    UiState.Success(usable)
+                }
+            }
+            .onFailure {
+                if (_exploreCharts.value !is UiState.Success) _exploreCharts.value = UiState.Error(it.friendly())
+            }
+    }
+
+    private suspend fun fetchExplore(fetchCharts: Boolean = true) {
+        if (fetchCharts) startExploreCharts()
+        loadMoodArtworkFromDisk()
         val state = YtMusicRepository.moodAndGenres().fold(
             onSuccess = { sections ->
                 if (sections.isEmpty()) {
                     UiState.Error(text(R.string.nothing_to_explore))
                 } else {
-                    UiState.Success(sections)
+                    // Artwork yang sudah pernah dimuat langsung dipakai, jadi
+                    // refresh tidak mengosongkan grid lalu mengulang puluhan request.
+                    UiState.Success(withCachedArtwork(sections))
                 }
             },
             onFailure = { UiState.Error(it.friendly()) },
@@ -1648,28 +1834,99 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * number at a time from the shelves they open, so the grid gains real art
      * without saturating the browse client or delaying the category list.
      */
+    private val moodArtworkCache = HashMap<String, String>()
+    private var moodArtworkJob: kotlinx.coroutines.Job? = null
+    private var moodArtworkLoaded = false
+
+    private fun moodArtworkFile() = File(getApplication<Application>().filesDir, MOOD_ARTWORK_FILE)
+
+    /**
+     * Membaca peta artwork dari disk sekali per proses, supaya buka Explore
+     * setelah app dimatikan langsung menampilkan gambar tanpa puluhan request.
+     * Berkas yang lebih tua dari seminggu diabaikan dan dibangun ulang.
+     */
+    private suspend fun loadMoodArtworkFromDisk() {
+        if (moodArtworkLoaded) return
+        moodArtworkLoaded = true
+        val stored = withContext(Dispatchers.IO) {
+            runCatching {
+                val file = moodArtworkFile()
+                if (!file.exists() || System.currentTimeMillis() - file.lastModified() > MOOD_ARTWORK_MAX_AGE_MS) {
+                    emptyMap()
+                } else {
+                    file.readLines().mapNotNull { line ->
+                        val cut = line.indexOf('\t')
+                        if (cut <= 0) null else line.substring(0, cut) to line.substring(cut + 1)
+                    }.toMap()
+                }
+            }.getOrDefault(emptyMap())
+        }
+        stored.forEach { (key, url) -> moodArtworkCache.putIfAbsent(key, url) }
+    }
+
+    private fun saveMoodArtworkToDisk() {
+        val snapshot = HashMap(moodArtworkCache)
+        if (snapshot.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val file = moodArtworkFile()
+                val tmp = File(file.parentFile, file.name + ".tmp")
+                tmp.writeText(snapshot.entries.joinToString("\n") { "${it.key}\t${it.value}" })
+                if (!tmp.renameTo(file)) tmp.delete()
+            }
+        }
+    }
+
+    private fun moodKey(item: MoodGenre) = "${item.browseId}|${item.params}"
+
+    private fun withCachedArtwork(sections: List<MoodGenreSection>): List<MoodGenreSection> =
+        if (moodArtworkCache.isEmpty()) {
+            sections
+        } else {
+            sections.map { section ->
+                section.copy(items = section.items.map { item ->
+                    moodArtworkCache[moodKey(item)]?.let { item.copy(thumbnailUrl = it) } ?: item
+                })
+            }
+        }
+
     private fun loadMoodGenreArtwork(sections: List<MoodGenreSection>) {
-        viewModelScope.launch {
-            val limiter = Semaphore(4)
+        // Refresh baru menggantikan pemuatan lama, bukan menumpuk di atasnya.
+        moodArtworkJob?.cancel()
+        val missing = sections.flatMap(MoodGenreSection::items).filter { moodKey(it) !in moodArtworkCache }
+        if (missing.isEmpty()) return
+        moodArtworkJob = viewModelScope.launch {
+            // Biarkan tab selesai masuk / loader refresh selesai dulu.
+            kotlinx.coroutines.delay(500)
+            val limiter = Semaphore(2)
+            val pending = HashMap<String, String>()
+            // Satu pembaruan state untuk banyak hasil, bukan satu per hasil:
+            // tiap pembaruan membangun ulang seluruh grid dan recompose.
+            fun flush() {
+                if (pending.isEmpty()) return
+                val batch = HashMap(pending)
+                pending.clear()
+                val current = (_explore.value as? UiState.Success)?.data ?: return
+                _explore.value = UiState.Success(current.map { section ->
+                    section.copy(items = section.items.map { currentItem ->
+                        batch[moodKey(currentItem)]?.let { currentItem.copy(thumbnailUrl = it) } ?: currentItem
+                    })
+                })
+            }
             coroutineScope {
-                sections.flatMap(MoodGenreSection::items).forEach { item ->
+                missing.forEach { item ->
                     launch {
                         val artwork = limiter.withPermit {
                             YtMusicRepository.moodGenreArtwork(item.browseId, item.params).getOrNull()
                         } ?: return@launch
-                        val current = (_explore.value as? UiState.Success)?.data ?: return@launch
-                        _explore.value = UiState.Success(current.map { section ->
-                            section.copy(items = section.items.map { currentItem ->
-                                if (currentItem.browseId == item.browseId && currentItem.params == item.params) {
-                                    currentItem.copy(thumbnailUrl = artwork)
-                                } else {
-                                    currentItem
-                                }
-                            })
-                        })
+                        moodArtworkCache[moodKey(item)] = artwork
+                        pending[moodKey(item)] = artwork
+                        if (pending.size >= 8) flush()
                     }
                 }
             }
+            flush()
+            saveMoodArtworkToDisk()
         }
     }
 
@@ -1706,20 +1963,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         homeContinuation = null
         homeSeenTitles.clear()
         _homeLoadingMore.value = false
-        _homeRecentlyPlayedLoading.value = _signedIn.value
+        _homeRecentlyPlayedLoading.value = _signedIn.value && !AppSettings.hideHomeRecents.value
         // The core feed plus one browse per supplement. Recently played is left
         // out: it has its own skeleton at the head of the page rather than the
         // one at the tail.
         _homePendingShelves.value = 1 + YtMusicRepository.HOME_SUPPLEMENT_BROWSE_IDS.size
-        loadTopPicks(identity, rebuild = false)
+        if (!AppSettings.hideHomeTopPicks.value) loadTopPicks(identity, rebuild = false)
         viewModelScope.launch {
-            launch {
+            val coreFeed = launch {
                 try {
                     YtMusicRepository.home()
                         .onSuccess { feed ->
                             if (!isCurrentHomeLoad(identity, generation)) return@onSuccess
                             homeContinuation = feed.continuation
                             publishHomeShelves(feed.shelves)
+                            (_home.value as? UiState.Success)?.data?.let { current ->
+                                val withQuick = withQuickPicksFallback(current)
+                                if (withQuick.size != current.size) {
+                                    homeSeenTitles.add("quick picks")
+                                    _home.value = UiState.Success(withQuick)
+                                }
+                            }
                         }
                         .onFailure { failure ->
                             if (isCurrentHomeLoad(identity, generation) && _home.value !is UiState.Success) {
@@ -1730,30 +1994,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     homeShelfRequestSettled(identity, generation)
                 }
             }
-            if (_signedIn.value) {
-                launch {
-                    YtMusicRepository.homeRecentlyPlayed()
-                        .onSuccess { shelf ->
-                            if (isCurrentHomeLoad(identity, generation)) {
-                                _homeRecentlyPlayedLoading.value = false
-                                shelf?.let { publishHomeShelves(listOf(it), prepend = true) }
-                            }
-                        }
-                        .onFailure {
-                            if (isCurrentHomeLoad(identity, generation)) _homeRecentlyPlayedLoading.value = false
-                        }
-                }
+            if (_signedIn.value && !AppSettings.hideHomeRecents.value) loadHomeRecents(identity, generation)
+            // Fetched together but published one after another in list order, and
+            // only once the core feed is in, so the rows never swap places with
+            // whichever request happened to answer first.
+            val supplements = YtMusicRepository.HOME_SUPPLEMENT_BROWSE_IDS.map { browseId ->
+                async { runCatching { YtMusicRepository.homeSupplement(browseId).getOrNull() }.getOrNull() }
             }
-            YtMusicRepository.HOME_SUPPLEMENT_BROWSE_IDS.forEach { browseId ->
-                launch {
+            launch {
+                coreFeed.join()
+                supplements.forEach { request ->
                     try {
-                        YtMusicRepository.homeSupplement(browseId).onSuccess { shelves ->
-                            if (isCurrentHomeLoad(identity, generation)) publishHomeShelves(shelves)
-                        }
+                        val shelves = request.await()
+                        if (shelves != null && isCurrentHomeLoad(identity, generation)) publishHomeShelves(shelves)
                     } finally {
                         homeShelfRequestSettled(identity, generation)
                     }
                 }
+                if (isCurrentHomeLoad(identity, generation)) ensureQuickPicks()
             }
         }
     }
@@ -1780,7 +2038,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } else if (!rebuild) {
                 _topPicks.value = null
             }
-            if (!rebuild && stored?.day == slot) {
+            if (!rebuild && topPicksBuiltThisSession && stored?.day == slot) {
                 _topPicksLoading.value = false
                 return@launch
             }
@@ -1794,11 +2052,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             _topPicks.value = picks
             topPicksSlotShown = slot
+            topPicksBuiltThisSession = true
             withContext(Dispatchers.IO) {
                 runCatching {
                     file.writeText(TopPicks.encode(TopPicks.Stored(identity, slot, picks, AppleArtistPhotos.snapshot())))
                 }
             }
+        }
+    }
+
+    /** Fetches the account's Recents row and puts it at the head of Home. Signed-in only. */
+    private fun loadHomeRecents(identity: String?, generation: Long) {
+        if (!_signedIn.value) return
+        _homeRecentlyPlayedLoading.value = true
+        viewModelScope.launch {
+            YtMusicRepository.homeRecentlyPlayed()
+                .onSuccess { shelf ->
+                    if (isCurrentHomeLoad(identity, generation)) {
+                        _homeRecentlyPlayedLoading.value = false
+                        shelf?.let { publishHomeShelves(listOf(it), prepend = true) }
+                    }
+                }
+                .onFailure {
+                    if (isCurrentHomeLoad(identity, generation)) _homeRecentlyPlayedLoading.value = false
+                }
         }
     }
 
@@ -1811,6 +2088,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * next one. A no-op otherwise, and while one is building.
      */
     fun refreshTopPicksIfStale() {
+        if (AppSettings.hideHomeTopPicks.value) return
         if (topPicksJob?.isActive == true) return
         if (topPicksSlotShown == null || topPicksSlotShown == topPicksSlot()) return
         loadTopPicks(listenerKey(), rebuild = false)
@@ -1839,14 +2117,80 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun localTaste(): TopPicks.LocalTaste {
         val month = runCatching { ListeningStats.summary(ReplayPeriod.THIS_MONTH) }.getOrNull()
             ?: return TopPicks.LocalTaste()
-        val allTime = runCatching { ListeningStats.summary(ReplayPeriod.ALL_TIME) }.getOrNull()
         return TopPicks.LocalTaste(
             artists = month.artists.take(10).map { ArtistRef(name = it.title, browseId = it.browseId) },
             songs = month.songs.take(5).map { it.song },
             genres = month.genres.take(3).map { it.title },
-            topSongs = allTime?.songs.orEmpty().take(30).map { it.song },
+            topSongs = runCatching { ListeningStats.summary(ReplayPeriod.ALL_TIME) }
+                .getOrNull()?.songs.orEmpty().take(30).map { it.song },
         )
     }
+
+    /**
+     * Speed dial built from what this device has played most, best first. Needs
+     * a few songs with a YouTube id and a cover to fill a grid; null before that.
+     */
+    /** How far down the most-played chart Speed dial draws from. */
+    private val SPEED_DIAL_POOL = 80
+
+    /**
+     * [count] of [ranked] at random, the higher a song sits the likelier it is,
+     * returned in shuffled order so Speed dial differs on every build.
+     */
+    private fun <T> weightedPick(ranked: List<T>, count: Int): List<T> {
+        if (ranked.size <= count) return ranked.shuffled()
+        val pool = ranked.withIndex().toMutableList()
+        val picked = mutableListOf<T>()
+        while (picked.size < count && pool.isNotEmpty()) {
+            val weights = pool.map { (ranked.size - it.index).toDouble() }
+            var roll = kotlin.random.Random.nextDouble() * weights.sum()
+            val index = weights.indexOfFirst { roll -= it; roll <= 0 }.coerceAtLeast(0)
+            picked += pool.removeAt(index).value
+        }
+        return picked.shuffled()
+    }
+
+    /**
+     * YouTube sometimes leaves Quick picks out of the feed. Builds one from the
+     * tracks the other shelves already carry (no extra request) and slots it
+     * right under Listen again, which Home then swaps to the front. Returned
+     * unchanged when the feed has it, or has too few tracks to fill a row.
+     */
+    private fun withQuickPicksFallback(feed: List<HomeShelf>): List<HomeShelf> {
+        fun key(shelf: HomeShelf) = com.miori.music.data.model.homeShelfKey(shelf.title)
+        val quickTitles = setOf(
+            "quick picks", "lựa chọn nhanh", "chọn nhanh đài phát", "クイック ミックス",
+            "pilihan cepat", "pilihan singkat", "빠른 선곡", "빠른 선택",
+        )
+        if (feed.any { it.title.trim().lowercase(Locale.ROOT) in quickTitles && it.items.isNotEmpty() }) return feed
+        val again = feed.indexOfFirst { key(it) == "shelf:listen-again" }
+        if (again < 0) return feed
+        val skipTitles = setOf("recents", "recently played", "my speed dial", "speed dial")
+        val listenAgainIds = feed[again].items.mapNotNull { it.videoId }.toSet()
+        val songs = feed
+            .filter { key(it) != "shelf:listen-again" && it.title.trim().lowercase(Locale.ROOT) !in skipTitles }
+            .flatMap { it.items }
+            .filter { it.videoId != null && !it.isVideo && !it.thumbnailUrl.isNullOrBlank() }
+            .filter { it.videoId !in listenAgainIds }
+            .distinctBy { it.videoId }
+            .shuffled()
+            .take(20)
+        if (songs.size < 4) return feed
+        val shelf = HomeShelf(title = "Quick picks", items = songs)
+        return feed.toMutableList().also { it.add(again + 1, shelf) }
+    }
+
+    /** Re-runs the Quick picks fallback once more of the feed has landed (supplements, next pages). */
+    private fun ensureQuickPicks() {
+        val current = (_home.value as? UiState.Success)?.data ?: return
+        val withQuick = withQuickPicksFallback(current)
+        if (withQuick.size != current.size) {
+            homeSeenTitles.add("quick picks")
+            _home.value = UiState.Success(withQuick)
+        }
+    }
+
+    private suspend fun localSpeedDialShelf(): HomeShelf? = null
 
     /**
      * One of the parallel first-page requests has finished. Ignored once a newer
@@ -1879,20 +2223,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Refreshes the core feed without blanking the current Play page first. */
     private suspend fun refreshHome(identity: String?) = coroutineScope {
-        val recent = if (_signedIn.value) async { YtMusicRepository.homeRecentlyPlayed() } else null
+        val recent = if (_signedIn.value && !AppSettings.hideHomeRecents.value) {
+            async { YtMusicRepository.homeRecentlyPlayed() }
+        } else {
+            null
+        }
         // Top Picks keeps to its hour; a pull refreshes the feed, not the
         // picks, unless the hour has already turned over.
-        if (topPicksJob?.isActive != true) loadTopPicks(identity, rebuild = false)
-        YtMusicRepository.home().onSuccess { feed ->
+        if (!AppSettings.hideHomeTopPicks.value && topPicksJob?.isActive != true) loadTopPicks(identity, rebuild = false)
+        val feedResult = YtMusicRepository.home()
+        val recentShelf = recent?.await()?.getOrNull()
+        feedResult.onSuccess { feed ->
             if (identity != listenerKey()) return@onSuccess
             homeContinuation = feed.continuation
             homeSeenTitles.clear()
             val shelves = feed.shelves.withoutRepeatsOf(emptyList())
                 .filter { homeSeenTitles.add(it.title.lowercase(Locale.ROOT)) }
-            if (shelves.isNotEmpty()) _home.value = UiState.Success(shelves)
-        }
-        recent?.await()?.onSuccess { shelf ->
-            if (identity == listenerKey()) shelf?.let { publishHomeShelves(listOf(it), prepend = true) }
+            if (shelves.isNotEmpty()) {
+                // Recents goes in with the feed in one update. Applied a moment
+                // later it swapped places with Listen again and shoved every row.
+                val replacing = listOfNotNull(recentShelf).map { it.title.lowercase(Locale.ROOT) }.toSet()
+                homeSeenTitles.addAll(replacing)
+                _home.value = UiState.Success(
+                    listOfNotNull(recentShelf) +
+                        withQuickPicksFallback(shelves.filterNot { it.title.lowercase(Locale.ROOT) in replacing }),
+                )
+            }
         }
     }
 
@@ -1917,6 +2273,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // treat it the same as exhausted so scrolling can't spin here.
                     homeContinuation = feed.continuation.takeIf { added.isNotEmpty() }
                     if (added.isNotEmpty()) _home.value = UiState.Success(existing + added)
+                    ensureQuickPicks()
                 }
             }
             if (identity == listenerKey()) _homeLoadingMore.value = false
@@ -1943,7 +2300,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             },
             onFailure = { UiState.Error(it.friendly()) },
         )
-        if (identity == listenerKey()) _library.value = next
+        if (identity == listenerKey()) _library.value = withPlaylistCovers(next)
+    }
+
+    /** Memasang cover galeri di kartu playlist pada shelf Playlists. */
+    private fun withPlaylistCovers(state: UiState<LibraryPage>): UiState<LibraryPage> {
+        val page = (state as? UiState.Success)?.data ?: return state
+        val cover = com.miori.music.data.PlaylistCovers.lookup(getApplication<Application>())
+        return UiState.Success(
+            page.copy(
+                shelves = page.shelves.map { shelf ->
+                    if (shelf.title != YtMusicRepository.PLAYLISTS_SHELF) {
+                        shelf
+                    } else {
+                        shelf.copy(
+                            items = shelf.items.map { item ->
+                                val c = item.browseId?.let(cover)
+                                if (c != null) item.copy(thumbnailUrl = c) else item
+                            },
+                        )
+                    }
+                },
+            ),
+        )
     }
 
     /**
@@ -2119,6 +2498,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun clearSearchHistory() = SearchHistory.clear()
 
     fun onQueryChange(newValue: String) {
+        val debugSecret = com.miori.music.BuildConfig.DEBUG_SECRET
+        if (debugSecret.isNotBlank() && newValue.trim() == debugSecret) {
+            com.miori.music.ui.player.CanvasFadeTuning.unlocked.value = true
+            onQueryChange("")
+            return
+        }
         _query.value = newValue
         if (newValue.isBlank()) {
             searchSubmitted = false
@@ -2225,7 +2610,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadLibrarySongs() {
         viewModelScope.launch {
             val context = getApplication<Application>()
-            _librarySongs.value = if (!LocalMediaRepository.hasStoragePermission(context)) {
+            _librarySongs.value = if (!LocalMediaRepository.canReadLocalMusic(context)) {
                 UiState.Error(text(R.string.storage_required_read))
             } else {
                 runCatching { LocalMediaRepository.getLocalMusic(context) }.fold(
@@ -2243,6 +2628,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_filter.value == value) return
         _filter.value = value
         searchSubmitted = true
+        runSearch()
+    }
+
+    /** Cari query saat ini tanpa mencatat riwayat; dipakai popup Add Songs saat mengetik. */
+    fun searchQuiet() {
+        if (_query.value.isBlank() || _searchSource.value != SearchSource.YOUTUBE) return
+        searchSubmitted = true
+        _suggestions.value = emptyList()
+        _typeaheadResults.value = emptyList()
         runSearch()
     }
 
@@ -2470,55 +2864,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The enabled non-YouTube sources, asked at the same time and returned
-     * split at YouTube's own place in the order.
-     *
-     * The split is what makes the Sources screen's ordering visible where it
-     * matters most. A library server ranked above YouTube puts its own copies
-     * at the top of the results — which is the whole point of ranking it there —
-     * and one ranked below appears under them instead.
-     *
-     * Only the Songs filter fans out: albums, artists and playlists are
-     * browse-shaped, and [MusicSource] deliberately answers for tracks only.
-     *
-     * Asked of the playback list rather than every enabled source, so a result
-     * offered here is one this connection's ceiling would actually let play —
-     * a row that can only be tapped into a YouTube stream is a lie about where
-     * the track is coming from.
-     */
-    private suspend fun sourceResults(
-        query: String,
-        filter: SearchFilter,
-    ): Pair<List<SearchResult>, List<SearchResult>> = coroutineScope {
-        if (filter != SearchFilter.SONGS) return@coroutineScope emptyList<SearchResult>() to emptyList()
-        val active = SourceRegistry.activeForPlayback()
-        val youtubeRank = active.indexOfFirst { it.kind == SourceKind.YOUTUBE }
-            .let { if (it < 0) active.size else it }
-
-        val answers = active
-            .filter { it.kind != SourceKind.YOUTUBE }
-            .map { source ->
-                source to async {
-                    // Per-source, so one slow or unreachable server delays the
-                    // results by at most this much rather than for as long as
-                    // its socket takes to give up.
-                    runCatching {
-                        withTimeout(SOURCE_SEARCH_TIMEOUT_MS) { source.search(query, SOURCE_SEARCH_LIMIT) }
-                    }.getOrDefault(emptyList())
-                }
-            }
-
-        val above = mutableListOf<SearchResult>()
-        val below = mutableListOf<SearchResult>()
-        answers.forEach { (source, job) ->
-            val rows = job.await().map { SearchResult.Track(it) }
-            val rank = active.indexOfFirst { it.configId == source.configId }
-            if (rank in 0 until youtubeRank) above += rows else below += rows
-        }
-        above to below
-    }
-
-    /**
      * Warms the stream URL for the top song result the instant results land,
      * not when it's tapped. [AudioCache] gives a head start to whatever's
      * already queued; a fresh search has nothing queued yet, and the top
@@ -2573,7 +2918,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         /** Today's Top Picks row, kept so the next launch paints it before any request. */
-        private const val TOP_PICKS_FILE = "top_picks_v4.json"
+        private const val TOP_PICKS_FILE = "top_picks_v6_8.json"
+
+        /** Peta artwork kategori Explore, kunci "browseId|params" lalu URL dipisah tab. */
+        private const val MOOD_ARTWORK_FILE = "explore_mood_art_v1.txt"
+        private const val MOOD_ARTWORK_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
 
         /** Per-addon budget for the Addons search tab; a slow addon is left out, not waited on. */
         private const val ADDON_SEARCH_TIMEOUT_MS = 12_000L
@@ -2608,20 +2957,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         const val TYPEAHEAD_MAX_RESULTS = 15
 
         const val SEARCH_CACHE_ENTRIES = 100
-
-        /**
-         * How long any one source gets to answer a search.
-         *
-         * Short on purpose: these run alongside the YouTube search, and their
-         * only job is to be *there* when it lands. A home server reached over
-         * a VPN that takes eight seconds has effectively not answered, and
-         * holding the whole result list for it would make search feel worse
-         * for the sake of results the user can still get by searching again.
-         */
-        const val SOURCE_SEARCH_TIMEOUT_MS = 4000L
-
-        /** Enough to be worth scrolling, short enough not to bury YouTube's own rows. */
-        const val SOURCE_SEARCH_LIMIT = 12
 
         /**
          * What a page with an empty listing says.
@@ -2705,6 +3040,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         subtitle: String = "",
         thumbnailUrl: String? = null,
         type: BrowseType = BrowseType.OTHER,
+        mix: String? = null,
     ) {
         // A fast double tap used to push two identical loading pages and launch
         // two identical browse requests. Besides wasting the connection, both
@@ -2727,6 +3063,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             thumbnailUrl = thumbnailUrl,
             songs = UiState.Loading,
             type = resolved,
+            mix = mix,
         )
         viewModelScope.launch {
             var sections = emptyList<HomeShelf>()
@@ -2839,6 +3176,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                                 if (thumbnailUrl == null) artwork = header.thumbnailUrl
                             }
                             description = page.description
+                            // Rekomendasi di akhir halaman album; layar sudah menggambar
+                            // DetailPage.sections untuk semua jenis halaman.
+                            sections = page.related
                             if (page.songs.isEmpty()) {
                                 UiState.Error(text(R.string.no_tracks_here))
                             } else {
@@ -2862,7 +3202,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     it.copy(
                         songs = state,
                         sections = sections,
-                        thumbnailUrl = artwork ?: it.thumbnailUrl,
+                        thumbnailUrl = com.miori.music.data.PlaylistCovers.get(getApplication<Application>(), browseId)
+                            ?: artwork ?: it.thumbnailUrl,
                         title = name ?: it.title,
                         subtitle = credit ?: it.subtitle,
                         suggestedSongs = suggested,
@@ -2981,10 +3322,86 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /**
+     * Membuka halaman Most Played dengan lagu yang sudah ada di kartu, jadi
+     * langsung terisi dan mosaic kartu bisa terbang ke sleeve-nya.
+     */
+    fun openMostPlayed(pick: TopPick, label: String) {
+        if (_detailStack.value.lastOrNull()?.browseId == MOST_PLAYED_BROWSE_ID) return
+        val songs = pick.songs.map { it.toSong() }
+        _detailStack.value += DetailPage(
+            browseId = MOST_PLAYED_BROWSE_ID,
+            title = pick.title.ifBlank { label },
+            subtitle = pick.subtitle,
+            thumbnailUrl = pick.images.firstOrNull(),
+            songs = if (songs.isEmpty()) UiState.Error(text(R.string.no_tracks_here)) else UiState.Success(songs),
+            covers = pick.images,
+        )
+    }
+
+    /**
+     * Membuka halaman sebuah Made for You Mix. New Music Mix memakai playlist
+     * YouTube-nya; mix lain membuka halaman `local:` yang langsung terisi
+     * (Favorites, Replay) atau memuat lagunya dulu (Chill, Friends, Get Up!).
+     * Sleeve-nya blob cairan yang sama dengan kartu, jadi cover bisa terbang.
+     */
+    fun openMix(pick: TopPick, label: String) {
+        val id = pick.mixPageId
+        if (_detailStack.value.lastOrNull()?.browseId == id) return
+        val title = pick.title.ifBlank { label }
+        if (!id.startsWith("local:")) {
+            openDetail(browseId = id, title = title, subtitle = pick.subtitle, thumbnailUrl = null, mix = title)
+            return
+        }
+        val ready = pick.songs.map { it.toSong() }
+        _detailStack.value += DetailPage(
+            browseId = id,
+            title = title,
+            subtitle = pick.subtitle,
+            thumbnailUrl = null,
+            songs = if (ready.isNotEmpty()) UiState.Success(ready) else UiState.Loading,
+            mix = title,
+        )
+        if (ready.isNotEmpty()) return
+        viewModelScope.launch {
+            val songs = TopPicks.queue(pick).getOrNull().orEmpty()
+            _detailStack.value = _detailStack.value.map { page ->
+                if (page.browseId == id) {
+                    page.copy(
+                        songs = if (songs.isEmpty()) UiState.Error(text(R.string.couldnt_load_tracks)) else UiState.Success(songs),
+                    )
+                } else page
+            }
+        }
+    }
+
     /** Renames an open page in place — a device playlist, whose title is the store's. */
     fun retitleDetail(browseId: String, title: String) {
         if (title.isBlank()) return
         _detailStack.value = _detailStack.value.map { if (it.browseId == browseId) it.copy(title = title) else it }
+    }
+
+    /**
+     * Sets or clears (null) the gallery cover of a playlist kept on this device,
+     * and restates it on its open page. The cover is stored under the browse id,
+     * which is also what [openDetail] looks it up by.
+     */
+    fun setLocalPlaylistCover(browseId: String, cover: android.net.Uri?) {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val url = if (cover != null) {
+                com.miori.music.data.PlaylistCovers.save(app, browseId, cover) ?: return@launch
+            } else {
+                com.miori.music.data.PlaylistCovers.remove(app, browseId)
+                null
+            }
+            com.miori.music.data.spotify.LocalPlaylistStore.setCover(browseId, url)
+            val shown = url ?: com.miori.music.data.spotify.LocalPlaylistStore.getPlaylist(browseId)
+                ?.songs?.firstNotNullOfOrNull { it.thumbnailUrl }
+            _detailStack.value = _detailStack.value.map {
+                if (it.browseId == browseId) it.copy(thumbnailUrl = shown) else it
+            }
+        }
     }
 
     fun reloadLocalDetail(browseId: String) {
@@ -3038,9 +3455,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             Downloads.recordIdOf(browseId) != null ->
                 nonEmpty(downloadedPlaylist(browseId)) { text(R.string.downloaded_playlist_empty) }
             browseId == "local:downloads" ->
-                nonEmpty(Downloads.getDownloadedSongs(context)) { "No downloaded tracks" }
+                nonEmpty(LocalMediaRepository.getDownloadedSongs(context)) { "No downloaded tracks" }
             browseId == CACHE_FOLDER_BROWSE_ID -> cachedSongsState()
-            browseId == "local:all" -> if (!LocalMediaRepository.hasStoragePermission(context)) {
+            browseId == "local:all" -> if (!LocalMediaRepository.canReadLocalMusic(context)) {
                 UiState.Error(text(R.string.storage_required_read))
             } else {
                 nonEmpty(LocalMediaRepository.getLocalMusic(context)) { text(R.string.no_local_audio_found) }

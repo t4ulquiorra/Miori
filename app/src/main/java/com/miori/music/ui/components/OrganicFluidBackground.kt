@@ -37,11 +37,12 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
-import com.miori.music.ui.screens.LocalArtworkScrolling
 import org.intellij.lang.annotations.Language
+import com.miori.music.ui.screens.LocalArtworkScrolling
 
 /**
- * Default color palette for Organic Fluid backgrounds.
+ * Warna bawaan Organic Fluid: hot pink, crimson, coral, peach, soft pink.
+ * Urutannya penting: shader memutar warna blob melewati kelimanya secara berurutan.
  */
 object OrganicFluidDefaults {
     val Palette: List<Color> = listOf(
@@ -54,10 +55,26 @@ object OrganicFluidDefaults {
 }
 
 /**
- * Continuous fluid liquid background inspired by Apple Music mix cards.
+ * Latar cairan abstrak yang terus mengalir, terinspirasi kartu promosi Apple Music.
  *
- * API 33+: AGSL fragment shader (domain warping + anisotropic Gaussian fields).
- * Below API 33: Animated radial ellipse Canvas gradient fallback.
+ * API 33+: satu fragment shader AGSL (domain warping + medan gaussian anisotropik
+ * yang berputar dan "bernapas"), digambar lewat [ShaderBrush]. Di bawah API 33
+ * dipakai fallback Canvas berupa gradien radial elips yang melebur.
+ *
+ * Hanya menggambar: tidak memengaruhi layout atau input. Animasi berhenti saat
+ * lifecycle di bawah STARTED, saat composable keluar layar, saat [animationSpeed]
+ * 0, atau saat animasi sistem dimatikan (skala durasi animator 0).
+ *
+ * Pemakaian:
+ * ```
+ * Box(Modifier.size(340.dp, 220.dp).clip(RoundedCornerShape(28.dp))) {
+ *     OrganicFluidBackground(Modifier.matchParentSize(), animationSpeed = 0.5f)
+ *     // konten kartu
+ * }
+ * ```
+ *
+ * @param colors palet; 5 warna dipakai berurutan (lebih sedikit akan diulang).
+ * @param animationSpeed 1 = kecepatan dasar yang sudah pelan; 0 = diam.
  */
 @Composable
 fun OrganicFluidBackground(
@@ -82,12 +99,14 @@ fun OrganicFluidBackground(
         }
     }
 
-    val scrolling = LocalArtworkScrolling.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val scrolling = LocalArtworkScrolling.current
     LaunchedEffect(lifecycle, clock, scrolling) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             snapshotFlow { clock.visible && speedState.value > 0f }.collectLatest { running ->
                 if (!running) return@collectLatest
+                // Semua instance (kartu, cover terbang, sleeve halaman) membaca jam yang
+                // sama, jadi fase blob tetap nyambung saat pindah kartu <-> halaman.
                 while (true) {
                     if (scrolling()) {
                         FluidTimeline.pause()
@@ -108,6 +127,8 @@ fun OrganicFluidBackground(
         modifier
             .onGloballyPositioned { clock.visible = it.isOnScreen(screenW, screenH) }
             .drawBehind {
+                // Satu-satunya state yang dibaca saat draw: tiap frame hanya redraw,
+                // tanpa recomposition.
                 val t = clock.seconds
                 if (agsl != null) {
                     agsl.draw(this, t.toFloat(), colorsState.value)
@@ -119,7 +140,10 @@ fun OrganicFluidBackground(
 }
 
 /**
- * Shared timeline for all fluid instances so cards and sleeves remain in phase.
+ * Jam bersama untuk semua latar cairan. Fase bertambah hanya saat ada instance
+ * yang berjalan (satu kali per frame, berapa pun jumlah instance), jadi kartu,
+ * cover terbang, dan halaman menampilkan frame yang sama, dan saat semuanya
+ * di-pause fase berhenti lalu lanjut dari frame terakhir.
  */
 private object FluidTimeline {
     var phase: Double = 30.0
@@ -132,6 +156,7 @@ private object FluidTimeline {
 
     fun tick(frameNanos: Long, speed: Float): Double {
         if (frameNanos > lastFrameNanos) {
+            // Dibatasi supaya jeda (pause / frame drop) tidak jadi lompatan.
             val dt = if (lastFrameNanos == 0L) 0.0 else ((frameNanos - lastFrameNanos) / 1_000_000_000.0).coerceAtMost(0.1)
             lastFrameNanos = frameNanos
             phase += dt * speed
@@ -154,6 +179,10 @@ private fun LayoutCoordinates.isOnScreen(screenW: Float, screenH: Float): Boolea
 
 private val UNIFORM_NAMES = arrayOf("c0", "c1", "c2", "c3", "c4")
 
+/**
+ * Apakah shader AGSL Organic Fluid bisa dipakai di perangkat ini. False di bawah
+ * API 33, atau bila shader gagal dikompilasi (beberapa GPU/ROM). Dicek sekali, lalu di-cache.
+ */
 object OrganicFluidSupport {
     val shaderSupported: Boolean by lazy {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -161,6 +190,7 @@ object OrganicFluidSupport {
     }
 }
 
+/** Shader dan brush dibuat sekali; per frame hanya uniform yang diubah. */
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private class AgslFluid {
     private val shader = RuntimeShader(FLUID_AGSL)
@@ -178,6 +208,7 @@ private class AgslFluid {
     }
 }
 
+/** Fallback < API 33: gradien radial elips yang bergerak, berputar, dan melebur. */
 private fun DrawScope.drawFluidFallback(t: Float, colors: List<Color>) {
     val n = colors.size
     fun pal(i: Int) = colors[((i % n) + n) % n]
@@ -243,14 +274,17 @@ half4 main(float2 fc) {
     float2 p = (fc - 0.5 * iResolution) / min(iResolution.x * 1.35, iResolution.y);
     float t = iTime;
 
+    // Domain warping: tiga oktaf aliran sinusoidal, masing-masing dengan lajunya sendiri.
     float2 w = p;
     w += 0.30 * float2(sin(p.y * 2.3 + t * 0.23), cos(p.x * 2.1 - t * 0.19));
     w += 0.17 * float2(sin(w.y * 3.7 - t * 0.31 + 1.3), cos(w.x * 3.3 + t * 0.27 + 2.1));
     w += 0.08 * float2(sin(w.y * 6.1 + t * 0.41 + 0.7), cos(w.x * 5.5 - t * 0.37 + 4.0));
 
+    // Dasar warna, ikut terdistorsi sehingga latar pun mengalir.
     float g = clamp(0.5 + w.y * 0.85 + 0.18 * sin(w.x * 2.0 + t * 0.13), 0.0, 1.0);
     float3 col = mix(pal(2.0 + t * 0.012), pal(3.55 + t * 0.012), g);
 
+    // Blob tinta: medan gaussian anisotropik di ruang terdistorsi, berputar dan bernapas.
     for (int i = 0; i < 6; i++) {
         float k = float(i) + 1.0;
         float h1 = fract(sin(k * 91.7) * 437.5);
@@ -272,9 +306,11 @@ half4 main(float2 fc) {
         col = mix(col, pal(k * 0.83 + t * 0.022 + h1 * 2.0), clamp(a, 0.0, 1.0) * 0.9);
     }
 
+    // Kilau lembut seperti cahaya yang menembus cairan.
     float ridge = pow(0.5 + 0.5 * sin(w.x * 2.6 + w.y * 1.9 + t * 0.17), 3.0);
     col = mix(col, float3(1.0, 0.86, 0.86), 0.10 * ridge);
 
+    // Dither agar tidak ada banding pada gradien halus.
     col += (fract(sin(dot(fc, float2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
     return half4(half3(clamp(col, 0.0, 1.0)), 1.0);
 }

@@ -12,6 +12,7 @@ data class LocalPlaylist(
     val id: String,
     val title: String,
     val songs: List<Song>,
+    val coverUrl: String? = null,
 ) {
     val browseId: String get() = "local:playlist:$id"
 }
@@ -57,7 +58,8 @@ object LocalPlaylistStore {
                     )
                     songs.add(song)
                 }
-                list.add(LocalPlaylist(id, title, songs))
+                val coverUrl = obj.optString("coverUrl", null).takeIf { !it.isNullOrBlank() && it != "null" }
+                list.add(LocalPlaylist(id, title, songs, coverUrl))
             }
             _playlists.value = list
         }
@@ -89,6 +91,46 @@ object LocalPlaylistStore {
         persist(updated)
     }
 
+    /** Adds [song] unless the playlist already holds it; true when it went in. */
+    fun addSong(id: String, song: Song): Boolean = addSongs(id, listOf(song)) > 0
+
+    /** Appends the tracks the playlist does not hold yet and returns how many went in. */
+    fun addSongs(id: String, songs: List<Song>): Int {
+        val current = getPlaylist(id) ?: return 0
+        val known = current.songs.mapTo(HashSet()) { it.videoId }
+        val fresh = songs.filter { known.add(it.videoId) }
+        if (fresh.isEmpty()) return 0
+        replace(current.id) { it.copy(songs = it.songs + fresh) }
+        return fresh.size
+    }
+
+    fun removeSong(id: String, videoId: String) {
+        val current = getPlaylist(id) ?: return
+        replace(current.id) { it.copy(songs = it.songs.filterNot { song -> song.videoId == videoId }) }
+    }
+
+    /** Puts the playlist's tracks in the order of [orderedVideoIds]; unlisted tracks keep their place at the end. */
+    fun reorder(id: String, orderedVideoIds: List<String>) {
+        val current = getPlaylist(id) ?: return
+        val rank = HashMap<String, Int>()
+        orderedVideoIds.forEachIndexed { index, videoId -> rank.putIfAbsent(videoId, index) }
+        replace(current.id) { playlist ->
+            playlist.copy(songs = playlist.songs.sortedBy { rank[it.videoId] ?: Int.MAX_VALUE })
+        }
+    }
+
+    /** Sets the custom cover; null goes back to the first track's artwork. */
+    fun setCover(id: String, coverUrl: String?) {
+        val current = getPlaylist(id) ?: return
+        replace(current.id) { it.copy(coverUrl = coverUrl) }
+    }
+
+    private fun replace(id: String, edit: (LocalPlaylist) -> LocalPlaylist) {
+        val updated = _playlists.value.map { if (it.id == id) edit(it) else it }
+        _playlists.value = updated
+        persist(updated)
+    }
+
     fun getPlaylist(id: String): LocalPlaylist? {
         val cleanId = id.removePrefix("local:playlist:").removePrefix("VL")
         return _playlists.value.firstOrNull { it.id == cleanId || it.id == id || it.browseId == id }
@@ -102,6 +144,7 @@ object LocalPlaylistStore {
                 val pObj = JSONObject()
                 pObj.put("id", playlist.id)
                 pObj.put("title", playlist.title)
+                pObj.put("coverUrl", playlist.coverUrl)
                 val songsArray = JSONArray()
                 for (song in playlist.songs) {
                     val sObj = JSONObject()

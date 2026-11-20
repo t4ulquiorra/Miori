@@ -24,30 +24,46 @@ import androidx.compose.ui.unit.LayoutDirection
  * It draws into an offscreen layer of its own and erases from that, so it
  * belongs on the content that fades, never on a surface the content sits over.
  */
-fun Modifier.fadingEdges(width: Dp, start: () -> Float = NoFade, end: () -> Float = NoFade): Modifier =
+fun Modifier.fadingEdges(
+    width: Dp,
+    start: () -> Float = NoFade,
+    end: () -> Float = NoFade,
+    startShift: Dp = Dp(0f),
+): Modifier =
     graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
         .drawWithCache {
             val fade = width.toPx().coerceAtMost(size.width / 2f)
+            val rtl = layoutDirection == LayoutDirection.Rtl
+            // How far the start fade is pushed out past its edge: the width stays
+            // the same, but its first part falls outside the box, so the text is
+            // already partly faded at the edge and clear sooner.
+            val shift = startShift.toPx().coerceIn(0f, fade)
+            // The start edge is the left one in LTR and the right one in RTL.
+            val leftShift = if (rtl) 0f else shift
+            val rightShift = if (rtl) shift else 0f
             // Erasing all of the content at the edge and none of it a fade in.
             val stops = Array(FADE_CURVE_STOPS + 1) { i ->
                 val t = i / FADE_CURVE_STOPS.toFloat()
                 t to Color.Black.copy(alpha = 1f - smootherStep(t))
             }
-            val leftBrush = Brush.horizontalGradient(*stops, startX = 0f, endX = fade)
-            val rightBrush = Brush.horizontalGradient(*stops, startX = size.width, endX = size.width - fade)
-            val rtl = layoutDirection == LayoutDirection.Rtl
+            val leftBrush = Brush.horizontalGradient(*stops, startX = -leftShift, endX = fade - leftShift)
+            val rightBrush = Brush.horizontalGradient(
+                *stops,
+                startX = size.width + rightShift,
+                endX = size.width - fade + rightShift,
+            )
             onDrawWithContent {
                 drawContent()
                 val left = (if (rtl) end() else start()).coerceIn(0f, 1f)
                 if (left > 0f) {
-                    drawRect(leftBrush, Offset.Zero, Size(fade, size.height), alpha = left, blendMode = BlendMode.DstOut)
+                    drawRect(leftBrush, Offset.Zero, Size(fade - leftShift, size.height), alpha = left, blendMode = BlendMode.DstOut)
                 }
                 val right = (if (rtl) start() else end()).coerceIn(0f, 1f)
                 if (right > 0f) {
                     drawRect(
                         rightBrush,
-                        Offset(size.width - fade, 0f),
-                        Size(fade, size.height),
+                        Offset(size.width - fade + rightShift, 0f),
+                        Size(fade - rightShift, size.height),
                         alpha = right,
                         blendMode = BlendMode.DstOut,
                     )

@@ -19,7 +19,7 @@ against this folder.
 ## Adapted code
 
 The bit-perfect output (`app/src/main/cpp/bitperfect/`,
-`app/src/main/java/com/miori/music/playback/audio/bitperfect/`) adapts
+`app/src/main/java/com/music/miori/playback/audio/bitperfect/`) adapts
 parts of [Mornye](https://github.com/mornyeapp/Mornye), Copyright 2026 zarzet,
 licensed LGPL-3.0-only. Each adapted file names its Mornye source and keeps
 that license in its header. The direct USB driver's realtime arithmetic has

@@ -95,7 +95,10 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
     private fun unpackedAsset(name: String): String {
         val file = java.io.File(context.filesDir, name)
         if (!file.exists() || file.length() == 0L) {
-            context.assets.open(name).use { input ->
+            // Tidak mengunduh sendiri: model diunduh lewat popup di pengaturan Automix.
+            val bundled = runCatching { context.assets.open(name) }.getOrNull()
+                ?: error("Model $name belum diunduh")
+            bundled.use { input ->
                 file.outputStream().use { output -> input.copyTo(output) }
             }
         }
@@ -253,6 +256,14 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
     fun analysisFor(trackId: String): TrackAnalysis = results[trackId] ?: TrackAnalysis(trackId = trackId)
 
     /**
+     * Seperti [analysisFor], tapi jatuh ke penyimpanan disk bila belum ada di memori.
+     * Membaca file, jadi hanya untuk pemanggil yang sudah di luar thread pemutaran
+     * (mis. pengurutan saran AutoPlay). Null bila tidak ada hasil yang bisa dipakai.
+     */
+    fun storedAnalysis(trackId: String): TrackAnalysis? =
+        (results[trackId] ?: store.load(trackId))?.takeIf { it.isUsable }
+
+    /**
      * Looks [trackId] up on disk, once, off the playback thread.
      *
      * Deliberately not folded into [analysisFor], which is called several times
@@ -273,9 +284,6 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
             results.putIfAbsent(trackId, stored)
         }
     }
-
-    /** True once [trackId] has a result, including a failure. Nothing more will arrive. */
-    fun isAnalysed(trackId: String): Boolean = results.containsKey(trackId)
 
     /**
      * True while a decode and inference for [trackId] is actually in flight.
@@ -870,6 +878,32 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
             return Copy(key = uri.toString(), rendition = null) { LocalAudioSource.open(resolver, uri) }
         }
         val rendition = chooseRendition(trackId, uri, durationSeconds) ?: return null
+        return Copy(key = rendition.key, rendition = rendition) { cache.renditionDataSource(uri, rendition) }
+    }
+
+    /**
+     * A part-cached copy of [trackId] that already holds audio up to
+     * [untilSeconds], for a loop mix deck cut from a track that is still
+     * arriving. [copyToRead] only takes a finished copy, but the incoming song
+     * is fetched in the last seconds before the mix, so a loop mix never had a
+     * finished copy of it to read and always fell back to a blend.
+     *
+     * Read the way the head pass reads one: the source ends where the cache
+     * does, and the caller checks what actually decoded.
+     */
+    private fun partialCopyToRead(trackId: String, uri: Uri, durationSeconds: Double, untilSeconds: Double): Copy? {
+        if (LocalAudioSource.isLocal(uri)) return null
+        val expected = durationSeconds.takeIf { it.isFinite() && it > 0 } ?: return null
+        val rendition = cache.renditionsOf(uri)
+            .filter { AutomixAnalysisSource.isCanonicalYouTubeRendition(uri.getQueryParameter("v"), it.key) }
+            .filter { it.contentLength > 0 && it.key !in badRenditions }
+            .filter { headSecondsOf(it, durationSeconds) >= untilSeconds + LOOP_PARTIAL_MARGIN_SECONDS }
+            .maxByOrNull { headSecondsOf(it, durationSeconds) }
+            ?: return null
+        if (rendition.key != cache.cacheKeyOf(uri)) {
+            val length = cache.renditionDataSource(uri, rendition).use(AudioDecoder::containerDurationSeconds)
+            if (length == null || length <= 0 || abs(length - expected) > RENDITION_DURATION_TOLERANCE) return null
+        }
         return Copy(key = rendition.key, rendition = rendition) { cache.renditionDataSource(uri, rendition) }
     }
 
@@ -1496,11 +1530,29 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
     ): com.miori.music.playback.loopmix.LoopRegion? {
         if (uri.getQueryParameter("v") == null && uri.authority == "source") return null
         val began = SystemClock.elapsedRealtime()
-        val copy = runCatching { copyToRead(trackId, uri, durationSeconds) }.getOrNull() ?: return null
+        val copy = runCatching { copyToRead(trackId, uri, durationSeconds) }.getOrNull()
+            ?: runCatching { partialCopyToRead(trackId, uri, durationSeconds, toSeconds) }.getOrNull()
+            ?: run {
+                Log.d(TAG, "Loop region $trackId: no copy holds ${"%.1f".format(Locale.ROOT, toSeconds)}s yet")
+                return null
+            }
         val (stereo, start) = copy.open()?.use { source ->
             AudioDecoder.decodeRegionStereo(source, max(0.0, fromSeconds), toSeconds) { stopped }
         } ?: return null
         if (stereo.left.isEmpty()) return null
+        // A part-cached copy reads to its end without complaint, so the region can
+        // come back short; a deck that runs out of audio mid-mix is worse than a blend.
+        if (copy.rendition?.isComplete == false) {
+            val reaches = start + stereo.left.size / stereo.sampleRate
+            if (reaches < toSeconds - LOOP_REGION_SLACK_SECONDS) {
+                Log.d(
+                    TAG,
+                    "Loop region $trackId: cached audio stops at ${"%.1f".format(Locale.ROOT, reaches)}s, " +
+                        "${"%.1f".format(Locale.ROOT, toSeconds)}s wanted",
+                )
+                return null
+            }
+        }
         val rate = sampleRate.toDouble()
         val left: FloatArray
         val right: FloatArray
@@ -1633,6 +1685,12 @@ class TrackAnalyzer(private val context: Context, private val cache: AudioCache)
          * borrowed beat grid would be useless — is rejected.
          */
         const val RENDITION_DURATION_TOLERANCE = 1.0
+
+        /** Audio a part-cached copy must hold beyond what a loop deck asks for before it is tried. */
+        const val LOOP_PARTIAL_MARGIN_SECONDS = 2.0
+
+        /** How far short of the asked end a part-cached loop region may stop and still be used. */
+        const val LOOP_REGION_SLACK_SECONDS = 0.25
 
         /**
          * Stand-in bitrate for a rendition whose real length isn't recorded yet,

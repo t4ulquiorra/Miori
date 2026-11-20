@@ -3,11 +3,6 @@ package com.miori.music.ui.screens
 import com.miori.music.sharedui.resources.*
 import org.jetbrains.compose.resources.DrawableResource
 import org.jetbrains.compose.resources.painterResource
-import androidx.compose.ui.graphics.Color
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.draw.clip
-import androidx.compose.foundation.background
-import androidx.compose.foundation.Image
 import org.jetbrains.compose.resources.stringResource
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,8 +18,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import com.miori.music.ui.components.ShelfRow
+import com.miori.music.ui.components.shelfStagger
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -41,12 +39,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.miori.music.data.YtMusicRepository
+import com.miori.music.data.model.HomeLayout
 import com.miori.music.data.model.HomeShelf
+import com.miori.music.data.model.LIBRARY_SLOT_LINKS
+import com.miori.music.data.model.LIBRARY_SLOT_ON_DEVICE
+import com.miori.music.data.model.LIBRARY_SLOT_PINNED
+import com.miori.music.data.model.LIBRARY_SLOT_REPLAY
 import com.miori.music.data.model.LibraryPage
+import com.miori.music.data.model.homeShelfKey
 import com.miori.music.data.model.ShelfItem
 import com.miori.music.data.model.UiState
 import com.miori.music.data.settings.LibrarySort
@@ -57,6 +63,7 @@ import com.miori.music.ui.components.MessageState
 import com.miori.music.ui.components.PAGE_GUTTER
 import com.miori.music.ui.components.PullToRefresh
 import com.miori.music.ui.components.SHELF_CARD_WIDTH
+import com.miori.music.ui.components.PinnedGridSkeleton
 import com.miori.music.ui.components.libraryGrid
 import com.miori.music.ui.components.librarySkeleton
 
@@ -116,20 +123,59 @@ fun LibraryScreen(
     deviceItems: List<ShelfItem>,
     /** The big "Library" heading; the desktop's pages carry none. */
     showTitle: Boolean = true,
+    /** The listener's own order and hidden rows; empty keeps the built-in order. */
+    layout: HomeLayout = HomeLayout(),
+    /** Artists as one row that scrolls sideways instead of the two-across grid. */
+    artistsRow: Boolean = false,
+    /** Called with true for the sideways row, false for the grid, from the Artists header. */
+    onArtistsRowChange: (Boolean) -> Unit = {},
+    /**
+     * Cards for pinned playlists that sit in no shelf of this page — a Spotify
+     * account's, which carries its own title and cover with the pin.
+     */
+    pinnedExtraItems: List<ShelfItem> = emptyList(),
 ) {
     val pinnedPlaylists by AppUi.host.pinnedPlaylists.collectAsStateWithLifecycle()
     val onDevice = stringResource(Res.string.on_device)
+    // Playlist yang di-pin ditampilkan sebagai grid 3 kolom di bawah judul,
+    // seperti Apple Music, dengan urutan sesuai urutan pin.
+    val playlistItems = if (!signedIn) {
+        emptyList()
+    } else {
+        (state as? UiState.Success<LibraryPage>)
+            ?.data?.shelves
+            ?.firstOrNull { it.title == PLAYLISTS }
+            ?.items
+            .orEmpty()
+    }
+    // A pin can name an account playlist or one kept on this device (a Spotify
+    // import), and the second kind lives on the On Device shelf, not the
+    // account's Playlists shelf, so both are searched.
+    val pinnedItems = pinnedPlaylists.mapNotNull { id ->
+        playlistItems.firstOrNull { it.browseId == id }
+            ?: deviceItems.firstOrNull { it.browseId == id }
+            ?: pinnedExtraItems.firstOrNull { it.browseId == id }
+    }
     PullToRefresh(
         refreshing = refreshing,
         onRefresh = onRefresh,
         state = pullState,
-        modifier = modifier,
         topInset = contentPadding.calculateTopPadding(),
+        modifier = modifier,
     ) {
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = contentPadding,
+            // The heading sits where Home's does: the whole page is lifted by
+            // the same amount, not just the title.
+            contentPadding = if (showTitle) {
+                PaddingValues(
+                    top = (contentPadding.calculateTopPadding() - HOME_TITLE_LIFT).coerceAtLeast(0.dp),
+                    bottom = contentPadding.calculateBottomPadding(),
+                )
+            } else {
+                contentPadding
+            },
         ) {
             if (showTitle) {
                 item {
@@ -141,91 +187,159 @@ fun LibraryScreen(
                     )
                 }
             }
-            item(key = "replay") { replay() }
-            if (links.isNotEmpty()) {
-                item(key = "links") { LibraryLinkList(links = links, onClick = onShelfItemClick) }
+            // Tiap bagian halaman adalah satu slot, supaya urutan dan sembunyinya
+            // bisa diatur lewat Customize (AppSettings.libraryLayout).
+            val sections = ArrayList<Pair<String, LazyListScope.() -> Unit>>()
+            fun section(key: String, emit: LazyListScope.() -> Unit) {
+                sections += key to emit
             }
-            if (deviceItems.isNotEmpty()) {
-                item(key = "shelf:$onDevice") {
-                    val onDeviceShelf = HomeShelf(title = onDevice, items = deviceItems)
-                    LibraryGridShelf(
-                        shelf = onDeviceShelf,
-                        onItemClick = onShelfItemClick,
-                        onItemLongPress = onShelfItemLongPress,
-                        onShowAll = { onShowAll(onDeviceShelf) },
-                    )
+            // Status muat/gagal selalu di akhir dan tidak ikut diatur.
+            val status = ArrayList<LazyListScope.() -> Unit>()
+            section(LIBRARY_SLOT_PINNED) {
+                // While the account's shelves are still loading, a pin that lives
+                // on the Playlists shelf can't be drawn yet. Hold its place with
+                // placeholders so the grid doesn't pop in late and shove the page.
+                if (signedIn && state is UiState.Loading && pinnedItems.size < pinnedPlaylists.size) {
+                    item(key = "pinned") { PinnedGridSkeleton(count = pinnedPlaylists.size) }
+                } else if (pinnedItems.isNotEmpty()) {
+                    item(key = "pinned") {
+                        LibraryPinnedGrid(
+                            items = pinnedItems,
+                            onClick = onShelfItemClick,
+                            onLongPress = onShelfItemLongPress,
+                        )
+                    }
+                }
+            }
+            section(LIBRARY_SLOT_LINKS) {
+                if (links.isNotEmpty()) {
+                    item(key = "links") { LibraryLinkList(links = links, onClick = onShelfItemClick) }
+                }
+            }
+            section(LIBRARY_SLOT_REPLAY) { item(key = "replay") { replay() } }
+            section(LIBRARY_SLOT_ON_DEVICE) {
+                // What is pinned already sits in the grid above, so the shelf
+                // keeps only the rest; "Show all" still opens everything.
+                val unpinnedDevice = deviceItems.filterNot { it.browseId != null && it.browseId in pinnedPlaylists }
+                if (unpinnedDevice.isNotEmpty()) {
+                    item(key = "shelf:$onDevice") {
+                        val onDeviceShelf = HomeShelf(title = onDevice, items = unpinnedDevice)
+                        LibraryGridShelf(
+                            shelf = onDeviceShelf,
+                            onItemClick = onShelfItemClick,
+                            onItemLongPress = onShelfItemLongPress,
+                            onShowAll = { onShowAll(HomeShelf(title = onDevice, items = deviceItems)) },
+                        )
+                    }
                 }
             }
             if (!signedIn) {
-                item(key = "shelf:$PLAYLISTS") {
-                    val emptyPlaylists = HomeShelf(PLAYLISTS, emptyList())
-                    PlaylistShelf(
-                        shelf = emptyPlaylists,
-                        onItemClick = onShelfItemClick,
-                        onItemLongPress = onShelfItemLongPress,
-                        onNewPlaylist = onNewPlaylist,
-                        onImportSpotifyPlaylist = onImportSpotifyPlaylist,
-                        onShowAll = { onShowAll(emptyPlaylists) },
-                    )
+                section(homeShelfKey(PLAYLISTS)) {
+                    item(key = "shelf:$PLAYLISTS") {
+                        val emptyPlaylists = HomeShelf(PLAYLISTS, emptyList())
+                        PlaylistShelf(
+                            shelf = emptyPlaylists,
+                            onItemClick = onShelfItemClick,
+                            onItemLongPress = onShelfItemLongPress,
+                            onNewPlaylist = onNewPlaylist,
+                            onImportSpotifyPlaylist = onImportSpotifyPlaylist,
+                            onShowAll = { onShowAll(emptyPlaylists) },
+                        )
+                    }
+                    item {
+                        MessageState(
+                            message = stringResource(Res.string.library_sign_in_description),
+                            actionLabel = stringResource(Res.string.sign_in),
+                            onAction = onSignIn,
+                        )
+                    }
                 }
-                item {
-                    MessageState(
-                        message = stringResource(Res.string.library_sign_in_description),
-                        actionLabel = stringResource(Res.string.sign_in),
-                        onAction = onSignIn,
-                    )
-                }
-                return@LazyColumn
-            }
-            when (state) {
-                is UiState.Loading -> librarySkeleton()
-                is UiState.Error -> item {
-                    MessageState(state.message, actionLabel = stringResource(Res.string.retry), onAction = onRetry)
-                }
-                is UiState.Success -> {
-                    // A fresh account has no Playlists shelf at all, and that
-                    // is exactly the account most in need of the button that
-                    // makes one — so the row is drawn either way, empty but
-                    // for the tile that creates the first playlist.
-                    val shelves = state.data.shelves
-                    if (shelves.none { it.title == PLAYLISTS }) {
-                        item(key = "shelf:$PLAYLISTS") {
-                            val emptyPlaylists = HomeShelf(PLAYLISTS, emptyList())
-                            PlaylistShelf(
-                                shelf = emptyPlaylists,
-                                onItemClick = onShelfItemClick,
-                                onItemLongPress = onShelfItemLongPress,
-                                onNewPlaylist = onNewPlaylist,
-                                onImportSpotifyPlaylist = onImportSpotifyPlaylist,
-                                onShowAll = { onShowAll(emptyPlaylists) },
-                            )
+            } else {
+                when (state) {
+                    is UiState.Loading -> status.add { librarySkeleton() }
+                    is UiState.Error -> status.add {
+                        item {
+                            MessageState(state.message, actionLabel = stringResource(Res.string.retry), onAction = onRetry)
                         }
                     }
-                    shelves.forEach { shelf ->
-                        item(key = "shelf:${shelf.title}") {
-                            if (shelf.title == PLAYLISTS) {
-                                val pinnedFirst = shelf.pinnedFirst(pinnedPlaylists)
-                                PlaylistShelf(
-                                    shelf = pinnedFirst,
-                                    onItemClick = onShelfItemClick,
-                                    onItemLongPress = onShelfItemLongPress,
-                                    onNewPlaylist = onNewPlaylist,
-                                    onImportSpotifyPlaylist = onImportSpotifyPlaylist,
-                                    onShowAll = { onShowAll(pinnedFirst) },
-                                    pinnedPlaylists = pinnedPlaylists,
-                                )
-                            } else {
-                                LibraryGridShelf(
-                                    shelf = shelf,
-                                    onItemClick = onShelfItemClick,
-                                    onItemLongPress = onShelfItemLongPress,
-                                    onShowAll = { onShowAll(shelf) },
-                                )
+                    is UiState.Success -> {
+                        // A fresh account has no Playlists shelf at all, and that
+                        // is exactly the account most in need of the button that
+                        // makes one — so the row is drawn either way, empty but
+                        // for the tile that creates the first playlist.
+                        val shelves = state.data.shelves
+                        if (shelves.none { it.title == PLAYLISTS }) {
+                            section(homeShelfKey(PLAYLISTS)) {
+                                item(key = "shelf:$PLAYLISTS") {
+                                    val emptyPlaylists = HomeShelf(PLAYLISTS, emptyList())
+                                    PlaylistShelf(
+                                        shelf = emptyPlaylists,
+                                        onItemClick = onShelfItemClick,
+                                        onItemLongPress = onShelfItemLongPress,
+                                        onNewPlaylist = onNewPlaylist,
+                                        onImportSpotifyPlaylist = onImportSpotifyPlaylist,
+                                        onShowAll = { onShowAll(emptyPlaylists) },
+                                    )
+                                }
+                            }
+                        }
+                        shelves.forEach { shelf ->
+                            section(homeShelfKey(shelf.title)) {
+                                item(key = "shelf:${shelf.title}") {
+                                    if (shelf.title == PLAYLISTS) {
+                                        val pinnedFirst = shelf
+                                            .copy(items = shelf.items.filterNot { it.browseId == YtMusicRepository.LIKED_MUSIC })
+                                            .pinnedFirst(pinnedPlaylists)
+                                        // Yang di-pin sudah tampil di grid atas, jadi shelf
+                                        // hanya menampilkan sisanya. "Show all" tetap membuka semuanya.
+                                        val unpinned = pinnedFirst.copy(
+                                            items = pinnedFirst.items.filterNot { it.browseId != null && it.browseId in pinnedPlaylists },
+                                        )
+                                        PlaylistShelf(
+                                            shelf = unpinned,
+                                            onItemClick = onShelfItemClick,
+                                            onItemLongPress = onShelfItemLongPress,
+                                            onNewPlaylist = onNewPlaylist,
+                                            onImportSpotifyPlaylist = onImportSpotifyPlaylist,
+                                            onShowAll = { onShowAll(pinnedFirst) },
+                                            pinnedPlaylists = pinnedPlaylists,
+                                        )
+                                    } else if (shelf.title == ARTISTS_SHELF && artistsRow) {
+                                        LibraryGridShelf(
+                                            shelf = shelf,
+                                            onItemClick = onShelfItemClick,
+                                            onItemLongPress = onShelfItemLongPress,
+                                            onShowAll = { onShowAll(shelf) },
+                                            headerAction = {
+                                                ArtistsLayoutToggle(row = true, onChange = onArtistsRowChange)
+                                            },
+                                        )
+                                    } else if (shelf.title == ARTISTS_SHELF) {
+                                        LibraryTwoColumnShelf(
+                                            shelf = shelf,
+                                            onItemClick = onShelfItemClick,
+                                            onItemLongPress = onShelfItemLongPress,
+                                            onShowAll = { onShowAll(shelf) },
+                                            headerAction = {
+                                                ArtistsLayoutToggle(row = false, onChange = onArtistsRowChange)
+                                            },
+                                        )
+                                    } else {
+                                        LibraryGridShelf(
+                                            shelf = shelf,
+                                            onItemClick = onShelfItemClick,
+                                            onItemLongPress = onShelfItemLongPress,
+                                            onShowAll = { onShowAll(shelf) },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
+            layout.arrange(sections) { it.first }.forEach { it.second(this) }
+            status.forEach { it(this) }
         }
     }
 }
@@ -271,7 +385,7 @@ private fun LibraryLinkList(links: List<LibraryLink>, onClick: (ShelfItem) -> Un
                 Spacer(Modifier.width(LINK_ICON_GAP))
                 Text(
                     text = link.item.title,
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp),
                     color = MaterialTheme.colorScheme.onBackground,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -295,7 +409,7 @@ private fun LibraryLinkList(links: List<LibraryLink>, onClick: (ShelfItem) -> Un
     }
 }
 
-private val LINK_ICON_SIZE = 24.dp
+private val LINK_ICON_SIZE = 28.dp
 private val LINK_ICON_GAP = 16.dp
 
 /**
@@ -313,26 +427,30 @@ private fun PlaylistShelf(
     onShowAll: () -> Unit,
     pinnedPlaylists: List<String> = emptyList(),
 ) {
-    LibraryGridShelf(
+    LibraryRowShelf(
         shelf = shelf,
         onItemClick = onItemClick,
         onItemLongPress = onItemLongPress,
         onShowAll = onShowAll,
         pinnedPlaylists = pinnedPlaylists,
-        leadingCard = {
-            Row(horizontalArrangement = Arrangement.spacedBy(LIBRARY_GRID_SPACING)) {
+        leadingCards = buildList<@Composable (Modifier) -> Unit> {
+            add { m ->
                 NewShelfCard(
                     icon = MioriIcons.Plus,
                     label = stringResource(Res.string.new_playlist),
                     subtitle = stringResource(Res.string.saved_to_youtube_music),
                     onClick = onNewPlaylist,
+                    modifier = m,
                 )
-                if (onImportSpotifyPlaylist != null) {
+            }
+            if (onImportSpotifyPlaylist != null) {
+                add { m ->
                     NewShelfCard(
                         icon = MioriIcons.Download,
                         label = stringResource(Res.string.import_spotify),
                         subtitle = stringResource(Res.string.import_spotify_subtitle),
                         onClick = onImportSpotifyPlaylist,
+                        modifier = m,
                         logo = Res.drawable.spotify_logo,
                     )
                 }
@@ -342,17 +460,16 @@ private fun PlaylistShelf(
 }
 
 /** A Library shelf's preview row never swipes past this many cards. */
-private const val LIBRARY_ROW_MAX_ITEMS = 5
+private const val LIBRARY_ROW_MAX_ITEMS = 6
 
 /**
- * A Library shelf: a sideways-scrolling row of [SHELF_CARD_WIDTH] cards, the
- * same as every other shelf, but stopped at [LIBRARY_ROW_MAX_ITEMS] rather
- * than left to run the shelf's whole length — with a "Show all" beside the
- * title whenever there's more than that, opening the rest as a
- * vertically-scrolling grid instead. See [LibraryGridPage].
+ * A Library shelf in the Apple Music style: a bold heading with "Show all"
+ * beside it, then one sideways-scrolling row of [SHELF_CARD_WIDTH] cards,
+ * stopped at [LIBRARY_ROW_MAX_ITEMS] — the rest is behind "Show all"
+ * ([LibraryGridPage]).
  *
- * [leadingCard], if given, occupies the first slot and counts against that
- * cap — see [PlaylistShelf].
+ * [leadingCards], if given, take the first slots in the row and count against
+ * that cap — see [PlaylistShelf]. Each is handed the width of a card.
  */
 @Composable
 internal fun LibraryGridShelf(
@@ -360,29 +477,232 @@ internal fun LibraryGridShelf(
     onItemClick: (ShelfItem) -> Unit,
     onItemLongPress: (ShelfItem) -> Unit,
     onShowAll: () -> Unit,
-    leadingCard: (@Composable () -> Unit)? = null,
+    leadingCards: List<@Composable (Modifier) -> Unit> = emptyList(),
     pinnedPlaylists: List<String> = emptyList(),
+    /** A small control drawn in the header, just before "Show all". */
+    headerAction: (@Composable () -> Unit)? = null,
 ) {
-    val leadingCount = if (leadingCard != null) 1 else 0
+    val leadingCount = leadingCards.size
     val visibleItems = shelf.items.take((LIBRARY_ROW_MAX_ITEMS - leadingCount).coerceAtLeast(0))
     Column(Modifier.padding(bottom = 26.dp)) {
-        SectionHeader(
+        LibrarySectionHeader(
             title = shelf.title,
             subtitle = shelf.subtitle,
             onShowAll = onShowAll.takeIf { shelf.items.size + leadingCount > LIBRARY_ROW_MAX_ITEMS },
+            trailing = headerAction,
         )
         ShelfRow(
+            state = rememberShelfListState("library:${shelf.title}"),
             contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
             horizontalArrangement = Arrangement.spacedBy(LIBRARY_GRID_SPACING),
         ) {
-            leadingCard?.let { card -> item(key = "leading") { card() } }
-            items(visibleItems) { item ->
+            itemsIndexed(leadingCards) { _, card ->
+                card(Modifier.width(SHELF_CARD_WIDTH))
+            }
+            itemsIndexed(visibleItems) { index, item ->
                 ShelfCard(
                     item = item,
                     onClick = { onItemClick(item) },
                     onLongPress = { onItemLongPress(item) },
+                    modifier = Modifier.shelfStagger(index).width(SHELF_CARD_WIDTH),
                     isPinned = item.browseId != null && item.browseId in pinnedPlaylists,
                 )
+            }
+        }
+    }
+}
+
+/** Tombol di header Artists: ikon grid saat sedang satu baris, ikon daftar saat sedang grid. */
+@Composable
+private fun ArtistsLayoutToggle(row: Boolean, onChange: (Boolean) -> Unit) {
+    Icon(
+        imageVector = if (row) MioriIcons.GridView else MioriIcons.ListView,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.primary,
+        modifier = Modifier
+            .padding(start = 8.dp)
+            .size(32.dp)
+            .clickable { onChange(!row) }
+            .padding(5.dp),
+    )
+}
+
+/** Judul shelf Artists di Library, seperti yang dikirim YtMusicRepository. */
+private const val ARTISTS_SHELF = "Artists"
+
+/**
+ * Shelf Artists: grid dua kolom (bukan satu baris geser), paling banyak
+ * [LIBRARY_ROW_MAX_ITEMS] kartu; sisanya di balik "Show all".
+ */
+@Composable
+private fun LibraryTwoColumnShelf(
+    shelf: HomeShelf,
+    onItemClick: (ShelfItem) -> Unit,
+    onItemLongPress: (ShelfItem) -> Unit,
+    onShowAll: () -> Unit,
+    headerAction: (@Composable () -> Unit)? = null,
+) {
+    Column(Modifier.padding(bottom = 26.dp)) {
+        LibrarySectionHeader(
+            title = shelf.title,
+            subtitle = shelf.subtitle,
+            onShowAll = onShowAll.takeIf { shelf.items.size > LIBRARY_ROW_MAX_ITEMS },
+            trailing = headerAction,
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = PAGE_GUTTER),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            shelf.items.take(LIBRARY_ROW_MAX_ITEMS).chunked(2).forEach { rowItems ->
+                Row(horizontalArrangement = Arrangement.spacedBy(LIBRARY_GRID_SPACING)) {
+                    rowItems.forEach { item ->
+                        ShelfCard(
+                            item = item,
+                            onClick = { onItemClick(item) },
+                            onLongPress = { onItemLongPress(item) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    repeat(2 - rowItems.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+    }
+}
+
+/** The Playlists row never swipes past this many cards, tiles included. */
+private const val LIBRARY_ROW_SHELF_MAX = 5
+
+/**
+ * The Playlists shelf: one sideways-scrolling row of [SHELF_CARD_WIDTH] cards
+ * under the Library heading, stopped at [LIBRARY_ROW_SHELF_MAX] with the rest
+ * behind "Show all". Every other shelf stays the two-across [LibraryGridShelf].
+ *
+ * [leadingCards] (New playlist, Import Spotify) take the first slots and count
+ * against that cap. Each is handed the width of a card.
+ */
+@Composable
+private fun LibraryRowShelf(
+    shelf: HomeShelf,
+    onItemClick: (ShelfItem) -> Unit,
+    onItemLongPress: (ShelfItem) -> Unit,
+    onShowAll: () -> Unit,
+    leadingCards: List<@Composable (Modifier) -> Unit> = emptyList(),
+    pinnedPlaylists: List<String> = emptyList(),
+) {
+    val leadingCount = leadingCards.size
+    val visibleItems = shelf.items.take((LIBRARY_ROW_SHELF_MAX - leadingCount).coerceAtLeast(0))
+    Column(Modifier.padding(bottom = 26.dp)) {
+        LibrarySectionHeader(
+            title = shelf.title,
+            subtitle = shelf.subtitle,
+            onShowAll = onShowAll.takeIf { shelf.items.size + leadingCount > LIBRARY_ROW_SHELF_MAX },
+        )
+        ShelfRow(
+            state = rememberShelfListState("library:${shelf.title}"),
+            contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+            horizontalArrangement = Arrangement.spacedBy(LIBRARY_GRID_SPACING),
+        ) {
+            itemsIndexed(leadingCards) { _, card ->
+                card(Modifier.width(SHELF_CARD_WIDTH))
+            }
+            itemsIndexed(visibleItems) { index, item ->
+                ShelfCard(
+                    item = item,
+                    onClick = { onItemClick(item) },
+                    onLongPress = { onItemLongPress(item) },
+                    modifier = Modifier.shelfStagger(index).width(SHELF_CARD_WIDTH),
+                    isPinned = item.browseId != null && item.browseId in pinnedPlaylists,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The Library's section heading: bold title, with "Show all" in the accent
+ * colour at the far end. Library only — Home and Explore keep [SectionHeader].
+ */
+@Composable
+private fun LibrarySectionHeader(
+    title: String,
+    subtitle: String = "",
+    onShowAll: (() -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+) {
+    val displayTitle = localizeShelfTitle(title)
+    val displaySubtitle = localizeShelfSubtitle(subtitle)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = PAGE_GUTTER)
+            .padding(top = 8.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = displayTitle,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (displaySubtitle.isNotBlank()) {
+                Text(
+                    text = displaySubtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        trailing?.invoke()
+        if (onShowAll != null) {
+            Text(
+                text = stringResource(Res.string.show_all),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clickable(onClick = onShowAll)
+                    .padding(start = 12.dp, top = 4.dp, bottom = 4.dp),
+            )
+        }
+    }
+}
+
+/**
+ * The pinned playlists as a three-across grid right under the title, the way
+ * Apple Music's Library opens. Long-press still opens the card's menu, which
+ * is where a playlist is unpinned.
+ */
+@Composable
+private fun LibraryPinnedGrid(
+    items: List<ShelfItem>,
+    onClick: (ShelfItem) -> Unit,
+    onLongPress: (ShelfItem) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = PAGE_GUTTER)
+            .padding(top = 4.dp, bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        items.chunked(3).forEach { rowItems ->
+            Row(horizontalArrangement = Arrangement.spacedBy(LIBRARY_GRID_SPACING)) {
+                rowItems.forEach { item ->
+                    ShelfCard(
+                        item = item,
+                        onClick = { onClick(item) },
+                        onLongPress = { onLongPress(item) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                repeat(3 - rowItems.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }

@@ -58,6 +58,7 @@ import com.composables.sfsymbols.monochrome.SFLine3Horizontal
 import com.composables.sfsymbols.monochrome.SFLine3HorizontalDecreaseCircle
 import com.composables.sfsymbols.monochrome.SFLivephotoSlash
 import com.composables.sfsymbols.monochrome.SFLock
+import com.composables.sfsymbols.monochrome.SFMagnifyingglass
 import com.composables.sfsymbols.monochrome.SFMoonZzz
 import com.composables.sfsymbols.monochrome.SFMusicMicrophone
 import com.composables.sfsymbols.monochrome.SFMusicNote
@@ -128,6 +129,8 @@ object SfIcons {
     // ---- Settings ----
     val AccountPlaceholder: ImageVector by lazy { bold(SfSymbols.Monochrome.SFPersonCropCircleFill) }
     val Add: ImageVector by lazy { bold(SfSymbols.Monochrome.SFPlus) }
+    val AddAccount: ImageVector by lazy { bold(SfSymbols.Monochrome.SFPersonCropCircleBadgePlus) }
+    val Advanced: ImageVector by lazy { bold(SfSymbols.Monochrome.SFWrenchAndScrewdriver) }
     val Animation: ImageVector by lazy { bold(SfSymbols.Monochrome.SFFigureWalkMotion) }
     val Appearance: ImageVector by lazy { bold(SfSymbols.Monochrome.SFPaintbrushPointed) }
     val Apps: ImageVector by lazy { bold(SfSymbols.Monochrome.SFSquareGrid2x2) }
@@ -173,6 +176,7 @@ object SfIcons {
     val Lock: ImageVector by lazy { bold(SfSymbols.Monochrome.SFLock) }
     val Login: ImageVector by lazy { bold(SfSymbols.Monochrome.SFArrowRightCircle) }
     val Logout: ImageVector by lazy { bold(SfSymbols.Monochrome.SFRectanglePortraitAndArrowRight) }
+    val ManageAccounts: ImageVector by lazy { bold(SfSymbols.Monochrome.SFPerson2BadgeGearshape) }
     val Miscellaneous: ImageVector by lazy { bold(SfSymbols.Monochrome.SFEllipsisCircle) }
     val MotionPhotosOff: ImageVector by lazy { bold(SfSymbols.Monochrome.SFLivephotoSlash) }
     val MusicNote: ImageVector by lazy { bold(SfSymbols.Monochrome.SFMusicNote) }
@@ -183,6 +187,7 @@ object SfIcons {
     val PlayCircle: ImageVector by lazy { bold(SfSymbols.Monochrome.SFPlayCircle) }
     val PlaylistPlay: ImageVector by lazy { bold(SfSymbols.Monochrome.SFMusicNoteList) }
     val RadioButtonChecked: ImageVector by lazy { bold(SfSymbols.Monochrome.SFRecordCircle) }
+    val Search: ImageVector by lazy { bold(SfSymbols.Monochrome.SFMagnifyingglass) }
     val Settings: ImageVector by lazy { bold(SfSymbols.Monochrome.SFGearshape) }
     val Share: ImageVector by lazy { bold(SfSymbols.Monochrome.SFSquareAndArrowUp) }
     val ShowChart: ImageVector by lazy { bold(SfSymbols.Monochrome.SFChartLineUptrendXyaxis) }
@@ -224,6 +229,27 @@ object SfIcons {
     val RemoveFromPlaylist: ImageVector by lazy { bold(SfSymbols.Monochrome.SFTextBadgeMinus) }
     val Reorder: ImageVector by lazy { bold(SfSymbols.Monochrome.SFArrowUpArrowDown) }
     val Revert: ImageVector by lazy { bold(SfSymbols.Monochrome.SFArrowUturnBackward) }
+
+    /** A phone outline with a home bar, for "Make it a story". */
+    val Story: ImageVector by lazy {
+        androidx.compose.ui.graphics.vector.ImageVector.Builder(
+            name = "sf_story_phone",
+            defaultWidth = androidx.compose.ui.unit.Dp(24f),
+            defaultHeight = androidx.compose.ui.unit.Dp(24f),
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).addPath(
+            pathData = androidx.compose.ui.graphics.vector.addPathNodes(
+                "M9,2.75 H15 A2.5,2.5 0 0 1 17.5,5.25 V18.75 A2.5,2.5 0 0 1 15,21.25 " +
+                    "H9 A2.5,2.5 0 0 1 6.5,18.75 V5.25 A2.5,2.5 0 0 1 9,2.75 Z " +
+                    "M10.5,18 H13.5",
+            ),
+            stroke = androidx.compose.ui.graphics.SolidColor(androidx.compose.ui.graphics.Color.Black),
+            strokeLineWidth = 2.2f,
+            strokeLineCap = androidx.compose.ui.graphics.StrokeCap.Round,
+            strokeLineJoin = androidx.compose.ui.graphics.StrokeJoin.Round,
+        ).build()
+    }
     val Shuffle: ImageVector by lazy { bold(SfSymbols.Monochrome.SFShuffle) }
     val SleepTimer: ImageVector by lazy { bold(SfSymbols.Monochrome.SFMoonZzz) }
     val Sliders: ImageVector by lazy { bold(SfSymbols.Monochrome.SFSliderHorizontal3) }

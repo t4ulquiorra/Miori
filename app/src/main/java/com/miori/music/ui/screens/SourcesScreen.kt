@@ -12,7 +12,15 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import com.miori.music.playback.audio.LosslessOutput
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import com.miori.music.data.sources.addon.AddonQualityOption
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -58,6 +66,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.ScrollState
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -111,10 +126,6 @@ fun SourcesScreen(
      * and the mini player.
      */
     onEditSource: (SourceConfig) -> Unit,
-    /** Asks the activity to open an addon's quality list — raised for the same reason as [onEditSource]. */
-    onChooseSourceQuality: (SourceConfig) -> Unit,
-    /** Asks the activity to explain an addon's "Outdated addon" line — raised for the same reason. */
-    onExplainOutdatedAddon: (SourceConfig) -> Unit,
     /**
      * Asks the activity to open the WebDAV editor — raised for the same
      * reason as [onEditSource]: the frosted alert cannot be drawn from inside
@@ -172,10 +183,7 @@ fun SourcesScreen(
             if (source is AddonSource) {
                 val named = withContext(Dispatchers.IO) { runCatching { source.manifestName() }.getOrNull() }
                 if (named != null && named != config.label) {
-                    // Off the stored config, not the one this pass started with:
-                    // the probe above may have just refreshed it, and the user
-                    // may have picked a quality in the meantime.
-                    SourceRegistry.config(config.id)?.let { SourceRegistry.update(it.copy(label = named)) }
+                    SourceRegistry.update(config.copy(label = named))
                 }
             }
         }
@@ -245,17 +253,19 @@ fun SourcesScreen(
                         // today".
                         skippedByQuality = config.enabled && !ceiling.permits(config.kind),
                         awaitingOutput = if (config.enabled && config.awaitsLosslessOutput) losslessOutput else null,
-                        // Read off the stored manifest, so it shows before the
-                        // probe below answers, and on a server that is down.
-                        needsUpdate = config.needsAddonUpdate,
                         onMetered = metered == true,
                         ceiling = ceiling,
+                        onPickQuality = { value ->
+                            // Off the stored config, not the one this row was
+                            // drawn from: a probe may have refreshed it since.
+                            SourceRegistry.config(config.id)?.let {
+                                SourceRegistry.update(it.copy(pickedQuality = value))
+                            }
+                        },
                         // Anything the user configured is theirs to edit or
                         // delete. JioSaavn and YouTube have no address to
                         // change, so a tap on them would open an empty editor.
                         onClick = if (config.kind.needsServer) ({ onEditSource(config) }) else null,
-                        onChooseQuality = { onChooseSourceQuality(config) },
-                        onExplainOutdated = { onExplainOutdatedAddon(config) },
                         // YouTube gets no switch at all — see
                         // [SourceRegistry.setEnabled] for why one would be a lie.
                         onToggle = if (config.kind == SourceKind.YOUTUBE) {
@@ -501,17 +511,12 @@ private fun ReorderableAddons(
     /** Which slot of [liveOrder] it began on. */
     var startIndex by remember { mutableIntStateOf(0) }
 
-    // Each row's height — the row plus its trailing hairline, measured off the
-    // wrapper holding both — by addon id. Per row rather than one shared pitch,
-    // because a row's status line wraps to as many lines as its message needs,
-    // so an addon with an error stands taller than its neighbours. Frozen for
-    // the duration of a gesture so a relayout mid-drag cannot move the
-    // boundaries the drag is being measured against underneath it.
-    val heights = remember { mutableStateMapOf<String, Float>() }
-    var lockedHeights by remember { mutableStateOf<Map<String, Float>>(emptyMap()) }
-
-    /** How far the dragged row's slot has moved since the gesture began: the heights of the rows it has passed. */
-    var slotShift by remember { mutableFloatStateOf(0f) }
+    // The distance from one row's top to the next — the row plus the hairline
+    // above it, measured off the wrapper holding both. Frozen for the duration
+    // of a gesture so a relayout mid-drag cannot move the boundaries the drag
+    // is being measured against underneath it.
+    var pitchPx by remember { mutableFloatStateOf(0f) }
+    var lockedPitchPx by remember { mutableFloatStateOf(0f) }
 
     liveOrder.forEachIndexed { index, config ->
         // Keyed on the config's id so this composable — gesture and all —
@@ -525,7 +530,7 @@ private fun ReorderableAddons(
                 modifier = Modifier
                     .fillMaxWidth()
                     .zIndex(if (isDragging) 1f else 0f)
-                    .onSizeChanged { heights[config.id] = it.height.toFloat() }
+                    .onSizeChanged { pitchPx = it.height.toFloat() }
                     .graphicsLayer {
                         // Read in the draw phase, so a drag moves the row
                         // without recomposing the list at all. The row sits
@@ -533,7 +538,12 @@ private fun ReorderableAddons(
                         // picked up, less whatever the swaps have already moved
                         // its slot — so a swap relocates the slot and shortens
                         // this by exactly as much, and the row does not budge.
-                        translationY = if (isDragging) totalDrag - slotShift else 0f
+                        translationY = if (isDragging) {
+                            totalDrag -
+                                (liveOrder.indexOfFirst { it.id == config.id } - startIndex) * lockedPitchPx
+                        } else {
+                            0f
+                        }
                     },
             ) {
                 row(index + 1, config) {
@@ -551,50 +561,39 @@ private fun ReorderableAddons(
                                     onDragStart = {
                                         dragged = config.id
                                         totalDrag = 0f
-                                        slotShift = 0f
                                         startIndex = liveOrder.indexOfFirst { it.id == config.id }
-                                        lockedHeights = heights.toMap()
+                                        lockedPitchPx = pitchPx
                                     },
                                     onDrag = { change, delta ->
                                         change.consume()
-                                        val height = { id: String -> lockedHeights[id] ?: 0f }
+                                        val pitch = lockedPitchPx
+                                        if (pitch <= 0f) return@detectDragGestures
                                         var at = liveOrder.indexOfFirst { it.id == config.id }
-                                        if (at < 0 || lockedHeights.isEmpty()) return@detectDragGestures
+                                        if (at < 0) return@detectDragGestures
 
                                         // Held past either end the row stops
                                         // there under the finger, rather than
                                         // running off the list and having to be
-                                        // dragged all the way back. The ends are
-                                        // the rows above and below the slot it
-                                        // started in, taken from the current
-                                        // order with the swaps undone.
-                                        val others = liveOrder.filterNot { it.id == config.id }
+                                        // dragged all the way back.
                                         totalDrag = (totalDrag + delta.y).coerceIn(
-                                            -others.take(startIndex).sumOf { height(it.id).toDouble() }.toFloat(),
-                                            others.drop(startIndex).sumOf { height(it.id).toDouble() }.toFloat(),
+                                            -startIndex * pitch,
+                                            (liveOrder.lastIndex - startIndex) * pitch,
                                         )
 
                                         // A loop, not an `if`: one pointer event
                                         // can cover several rows when the finger
                                         // is quick, and settling one row per
                                         // event would leave the list trailing.
-                                        // A swap with a neighbour moves the slot
-                                        // by that neighbour's height, so the
-                                        // threshold is a share of the row being
-                                        // passed, whatever height either row is.
                                         while (true) {
-                                            val offset = totalDrag - slotShift
-                                            val below = liveOrder.getOrNull(at + 1)?.let { height(it.id) }
-                                            val above = liveOrder.getOrNull(at - 1)?.let { height(it.id) }
-                                            if (below != null && below > 0f && offset > below * SWAP_THRESHOLD) {
+                                            val travelled = totalDrag / pitch
+                                            val moved = (at - startIndex).toFloat()
+                                            if (travelled > moved + SWAP_THRESHOLD && at < liveOrder.lastIndex) {
                                                 liveOrder = liveOrder.toMutableList()
                                                     .apply { add(at + 1, removeAt(at)) }
-                                                slotShift += below
                                                 at++
-                                            } else if (above != null && above > 0f && offset < -above * SWAP_THRESHOLD) {
+                                            } else if (travelled < moved - SWAP_THRESHOLD && at > 0) {
                                                 liveOrder = liveOrder.toMutableList()
                                                     .apply { add(at - 1, removeAt(at)) }
-                                                slotShift -= above
                                                 at--
                                             } else {
                                                 break
@@ -604,13 +603,11 @@ private fun ReorderableAddons(
                                     onDragEnd = {
                                         dragged = null
                                         totalDrag = 0f
-                                        slotShift = 0f
                                         onReorder(liveOrder)
                                     },
                                     onDragCancel = {
                                         dragged = null
                                         totalDrag = 0f
-                                        slotShift = 0f
                                         liveOrder = addons
                                     },
                                 )
@@ -618,9 +615,10 @@ private fun ReorderableAddons(
                     )
                 }
                 // After the row, not before it, so every wrapper is exactly one
-                // row plus one hairline — the height the drag measures it by.
+                // row plus one hairline — the pitch the drag measures against.
                 // With the divider leading, the first wrapper was short by a
-                // rule.
+                // rule and whichever row reported its size last decided the
+                // pitch for all of them.
                 RowDivider()
             }
         }
@@ -629,7 +627,7 @@ private fun ReorderableAddons(
 
 /**
  * How far past a neighbour the finger has to carry a row before the two trade
- * places, as a share of the height of the row being passed.
+ * places, as a share of one row's pitch.
  *
  * Deliberately more than half, for the reason spelled out in
  * [LyricsSourcesDialog][com.miori.music.ui.components.LyricsSourcesDialog]:
@@ -758,28 +756,77 @@ private fun BluetoothCodecPermissionRow() {
                 ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
             )
         }
     }
 }
 
+/**
+ * One source: the row itself and, for an addon that offers a choice of
+ * renditions, its quality pills on a line below. The pills get the full width
+ * of the row rather than the column beside the switch, so more of them are
+ * visible at once and the rest scroll in from a faded edge.
+ */
 @Composable
 private fun SourceRow(
     position: Int,
     config: SourceConfig,
     health: SourceHealth?,
     onClick: (() -> Unit)?,
-    onChooseQuality: () -> Unit,
-    /** Explains the "Outdated addon" line, which only an addon with [needsUpdate] shows. */
-    onExplainOutdated: () -> Unit,
+    onToggle: ((Boolean) -> Unit)?,
+    skippedByQuality: Boolean = false,
+    awaitingOutput: LosslessOutput.State? = null,
+    onMetered: Boolean = false,
+    ceiling: AudioQuality = AudioQuality.LOSSLESS,
+    onPickQuality: (String) -> Unit = {},
+    handle: (@Composable () -> Unit)? = null,
+) {
+    val dimmed = !config.enabled || skippedByQuality || awaitingOutput != null
+    Column(modifier = Modifier.fillMaxWidth()) {
+        SourceRowHeader(
+            position = position,
+            config = config,
+            health = health,
+            onClick = onClick,
+            onToggle = onToggle,
+            skippedByQuality = skippedByQuality,
+            awaitingOutput = awaitingOutput,
+            onMetered = onMetered,
+            ceiling = ceiling,
+            handle = handle,
+        )
+        // Read off the stored manifest, so it can be set while the addon
+        // is down or waiting on a lossless output. Only when the addon
+        // actually offers a choice (two or more renditions).
+        if (config.kind == SourceKind.ADDON && config.isComplete && config.qualityOptions.isNotEmpty()) {
+            AddonQualityStrip(
+                options = config.qualityOptions,
+                selected = config.activeQuality,
+                onPick = onPickQuality,
+                // Lines up with the source's name: position + gap + icon + gap.
+                startInset = ROW_INSET + 18.dp + 6.dp + ICON_SIZE + ICON_GAP,
+                endInset = ROW_INSET,
+                modifier = Modifier
+                    .alpha(if (dimmed) 0.4f else 1f)
+                    .padding(bottom = 10.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SourceRowHeader(
+    position: Int,
+    config: SourceConfig,
+    health: SourceHealth?,
+    onClick: (() -> Unit)?,
     /** Null for a source that cannot be switched off, which gets a label instead. */
     onToggle: ((Boolean) -> Unit)?,
     /** On, but skipped by the ceiling the current connection is set to. */
     skippedByQuality: Boolean = false,
     /** On, but its addon needs a lossless output and this is what is connected instead. Null when not waiting. */
     awaitingOutput: LosslessOutput.State? = null,
-    /** An addon that is out of date (no `mioriAuth` in its manifest). Still used; flagged on a line of its own. */
-    needsUpdate: Boolean = false,
     /** Which of the two ceilings [ceiling] is, so the row can name it. */
     onMetered: Boolean = false,
     ceiling: AudioQuality = AudioQuality.LOSSLESS,
@@ -839,45 +886,6 @@ private fun SourceRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            // Read off the stored manifest, so it can still be set while the
-            // addon is down or waiting on a lossless output. One line whatever
-            // the label's length, so it adds the same height to every addon;
-            // the full label is in the list it opens.
-            val quality = config.activeQuality
-            if (config.kind == SourceKind.ADDON && config.isComplete && quality != null) {
-                Row(
-                    modifier = Modifier
-                        .clickable(
-                            onClickLabel = stringResource(R.string.audio_quality),
-                            onClick = onChooseQuality,
-                        )
-                        .padding(vertical = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = SfIcons.Tune,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(14.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = quality.label,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    Spacer(Modifier.width(2.dp))
-                    Icon(
-                        imageVector = SfIcons.ChevronRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(10.dp),
-                    )
-                }
-            }
             Text(
                 // The ceiling outranks the health line: a source that isn't
                 // going to be asked at all is not usefully described by
@@ -913,9 +921,10 @@ private fun SourceRow(
                     health is SourceHealth.Rejected -> MaterialTheme.colorScheme.error
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                 },
-                // No line limit: an error is only useful read in full, so the
-                // row grows to fit it. [ReorderableAddons] measures each row's
-                // own height, so a tall row still drags correctly.
+                // The lossless-output warning is the longest line a row can
+                // show, and it is the one the user has to read to act on.
+                maxLines = if (awaitingOutput != null) 4 else 2,
+                overflow = TextOverflow.Ellipsis,
             )
             // The addon's own `allowDownloads`, on a line of its own and both
             // ways round, so whether downloads come from it is answered here
@@ -948,34 +957,6 @@ private fun SourceRow(
                     )
                 }
             }
-            // A caution, not a block: the addon still works, but its developer
-            // should update it. Short here, with the full explanation a tap
-            // away, so it costs the row one line.
-            if (needsUpdate) {
-                Row(
-                    modifier = Modifier
-                        .clickable(
-                            onClickLabel = stringResource(R.string.source_outdated),
-                            onClick = onExplainOutdated,
-                        )
-                        .padding(top = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = SfIcons.Warning,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(14.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = stringResource(R.string.source_outdated),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        maxLines = 1,
-                    )
-                }
-            }
         }
         Spacer(Modifier.width(8.dp))
         if (onToggle == null) {
@@ -999,6 +980,115 @@ private fun SourceRow(
         }
     }
 }
+
+/**
+ * An addon's own quality choices, laid out under its name as a row of pills.
+ *
+ * Every rendition the addon lists is visible at once and one tap picks it,
+ * where a single "current value" link would hide the list behind a dialog.
+ * The filled pill is the one in force; the row scrolls sideways for addons
+ * that list more than fit, running the full width of the row and fading out
+ * at whichever edge still has pills beyond it.
+ */
+@Composable
+private fun AddonQualityStrip(
+    options: List<AddonQualityOption>,
+    selected: AddonQualityOption?,
+    onPick: (String) -> Unit,
+    startInset: Dp,
+    endInset: Dp,
+    modifier: Modifier = Modifier,
+) {
+    val scroll = rememberScrollState()
+    Column(modifier = modifier) {
+        Row(
+            modifier = Modifier.padding(start = startInset),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = SfIcons.Tune,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(13.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = stringResource(R.string.audio_quality),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+        Row(
+            modifier = Modifier
+                .padding(top = 6.dp)
+                .fillMaxWidth()
+                .horizontalEdgeFade(scroll, 28.dp)
+                .horizontalScroll(scroll)
+                .padding(start = startInset, end = endInset),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            options.forEach { option ->
+                val isSelected = option.value == selected?.value
+                val container by animateColorAsState(
+                    targetValue = if (isSelected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                    },
+                    label = "qualityPillContainer",
+                )
+                val content by animateColorAsState(
+                    targetValue = if (isSelected) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                    label = "qualityPillContent",
+                )
+                Text(
+                    text = option.label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = content,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(container)
+                        .clickable(role = Role.RadioButton, onClickLabel = option.label) {
+                            if (!isSelected) onPick(option.value)
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Fades the viewport's left and right edges out, each only while there is
+ * content scrolled past it. Read in the draw phase, so scrolling redraws the
+ * mask without recomposing the row.
+ */
+private fun Modifier.horizontalEdgeFade(scroll: ScrollState, width: Dp): Modifier =
+    graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        .drawWithContent {
+            drawContent()
+            if (size.width <= 0f) return@drawWithContent
+            val fadePx = width.toPx().coerceAtMost(size.width / 2f)
+            val fraction = fadePx / size.width
+            val startFade = (scroll.value / fadePx).coerceIn(0f, 1f)
+            val endFade = ((scroll.maxValue - scroll.value) / fadePx).coerceIn(0f, 1f)
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    0f to Color.Black.copy(alpha = 1f - startFade),
+                    fraction to Color.Black,
+                    1f - fraction to Color.Black,
+                    1f to Color.Black.copy(alpha = 1f - endFade),
+                ),
+                blendMode = BlendMode.DstIn,
+            )
+        }
 
 @Composable
 private fun AudioQuality.localizedLabel(): String = stringResource(

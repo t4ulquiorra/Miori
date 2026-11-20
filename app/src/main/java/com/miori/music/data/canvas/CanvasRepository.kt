@@ -1,5 +1,6 @@
 package com.miori.music.data.canvas
 
+import androidx.media3.common.util.UnstableApi
 import com.miori.music.data.DebugLog as Log
 import com.miori.music.data.model.Song
 import com.miori.music.data.settings.AppSettings
@@ -85,25 +86,21 @@ object CanvasRepository {
         // a second time. [reusable] decides when the earlier answer still
         // stands instead.
         val album = song.albumName
-        val spotifyFirst = AppSettings.prioritizeSpotifyCanvas.value
-        val key = cacheKey("song|${song.videoId}", spotifyFirst)
+        val order = AppSettings.canvasProviderOrder.value
+        val key = cacheKey("song|${song.videoId}", order)
 
         return resolve(key, album != null) {
-            if (spotifyFirst) {
-                firstHit(
-                    { SpotifyCanvas.search(title, artist, album) },
-                    { AppleMusicCanvas.search(title, artist, album) },
-                    { TidalCanvas.search(title, artist, album) },
-                    { CommunityCanvas.search(title, artist, album) },
-                ) { it.matches(title, artist, album) }
-            } else {
-                firstHit(
-                    { AppleMusicCanvas.search(title, artist, album) },
-                    { TidalCanvas.search(title, artist, album) },
-                    { CommunityCanvas.search(title, artist, album) },
-                    { SpotifyCanvas.search(title, artist, album) },
-                ) { it.matches(title, artist, album) }
-            }
+            firstHit(
+                order = order,
+                lookup = { provider ->
+                    when (provider) {
+                        CanvasProvider.MIORI -> CommunityCanvas.search(title, artist, album)
+                        CanvasProvider.APPLE_MUSIC -> AppleMusicCanvas.search(title, artist, album)
+                        CanvasProvider.TIDAL -> TidalCanvas.search(title, artist, album)
+                        CanvasProvider.SPOTIFY -> SpotifyCanvas.search(title, artist, album)
+                    }
+                },
+            ) { it.matches(title, artist, album) }
         }
     }
 
@@ -117,9 +114,31 @@ object CanvasRepository {
     fun cached(song: Song): CanvasArtwork? {
         val key = cacheKey(
             base = "song|${song.videoId}",
-            spotifyFirst = AppSettings.prioritizeSpotifyCanvas.value,
+            order = AppSettings.canvasProviderOrder.value,
         )
-        return synchronized(cache) { cache[key]?.artwork }
+        synchronized(cache) { cache[key]?.artwork }?.let { return it }
+        // Offline (no active network) the lookup cannot run at all, so the
+        // clip already worked out in an earlier session is the only answer.
+        if (AppSettings.meteredConnection.value != null) return null
+        return CanvasIndex.get("song|${song.videoId}")
+    }
+
+    /**
+     * Canvas [song] yang klipnya sudah utuh di disk ([CanvasCache]), tanpa
+     * menyentuh jaringan. Dipakai saat canvas lewat data seluler dimatikan:
+     * klip yang sudah ada di cache tetap diputar karena tidak memakai kuota,
+     * sedangkan lagu tanpa klip di cache tidak memicu pencarian/unduhan.
+     */
+    @OptIn(UnstableApi::class)
+    fun cachedOnDisk(song: Song): CanvasArtwork? {
+        if (song.videoId.isBlank()) return null
+        val key = cacheKey(
+            base = "song|${song.videoId}",
+            order = AppSettings.canvasProviderOrder.value,
+        )
+        val artwork = synchronized(cache) { cache[key]?.artwork }
+            ?: CanvasIndex.get("song|${song.videoId}")
+        return artwork?.takeIf { CanvasCache.isCached(it) }
     }
 
     /**
@@ -135,29 +154,28 @@ object CanvasRepository {
         val credit = artist.cleaned()
         if (name.isBlank() || credit.isBlank()) return null
 
-        val spotifyFirst = AppSettings.prioritizeSpotifyCanvas.value
-        return resolve(cacheKey("album|$name|$credit", spotifyFirst), withAlbum = true) {
-            if (spotifyFirst) {
-                firstHit(
-                    { SpotifyCanvas.searchAlbum(name, credit) },
-                    { AppleMusicCanvas.searchAlbum(name, credit) },
-                    { TidalCanvas.searchAlbum(name, credit) },
-                    { CommunityCanvas.searchAlbum(name, credit) },
-                ) { it.matches(name, credit, name) }
-            } else {
-                firstHit(
-                    { AppleMusicCanvas.searchAlbum(name, credit) },
-                    { TidalCanvas.searchAlbum(name, credit) },
-                    { CommunityCanvas.searchAlbum(name, credit) },
-                    { SpotifyCanvas.searchAlbum(name, credit) },
-                ) { it.matches(name, credit, name) }
-            }
+        val order = AppSettings.canvasProviderOrder.value
+        return resolve(cacheKey("album|$name|$credit", order), withAlbum = true) {
+            firstHit(
+                order = order,
+                lookup = { provider ->
+                    when (provider) {
+                        CanvasProvider.MIORI -> CommunityCanvas.searchAlbum(name, credit)
+                        CanvasProvider.APPLE_MUSIC -> AppleMusicCanvas.searchAlbum(name, credit)
+                        CanvasProvider.TIDAL -> TidalCanvas.searchAlbum(name, credit)
+                        CanvasProvider.SPOTIFY -> SpotifyCanvas.searchAlbum(name, credit)
+                    }
+                },
+            ) { it.matches(name, credit, name) }
         }
     }
 
     /** Priority is part of the question, so a toggle never reuses the other order's answer. */
-    private fun cacheKey(base: String, spotifyFirst: Boolean): String =
-        "$base|spotifyFirst=$spotifyFirst"
+    private fun cacheKey(base: String, order: List<CanvasProvider>): String =
+        "$base|order=${order.joinToString(",") { it.name }}"
+
+    /** The question without its priority order — what the on-disk index is keyed on. */
+    private fun baseKey(key: String): String = key.substringBeforeLast("|order=")
 
     private suspend fun resolve(
         key: String,
@@ -167,7 +185,15 @@ object CanvasRepository {
         synchronized(cache) {
             cache[key]?.let { if (it.reusable(withAlbum)) return@withLock it.artwork }
         }
-        val found = withContext(Dispatchers.IO) { lookUp() }
+        val saved = CanvasIndex.get(baseKey(key))
+        // Offline there is nothing to ask. Answer from the on-disk index and
+        // do not remember a miss: it would outlive the outage and keep the
+        // canvas off after the network is back.
+        if (AppSettings.meteredConnection.value == null) return@withLock saved
+        // A lookup that fails online (no internet behind the Wi-Fi, provider
+        // down) falls back to the clip that was found before.
+        val found = withContext(Dispatchers.IO) { lookUp() } ?: saved
+        if (found != null) CanvasIndex.put(baseKey(key), found)
         synchronized(cache) { cache[key] = Entry(found, withAlbum) }
         found
     }
@@ -191,11 +217,12 @@ object CanvasRepository {
      * canvas is not worth surfacing as an error.
      */
     private suspend fun firstHit(
-        vararg sources: suspend () -> CanvasArtwork?,
+        order: List<CanvasProvider>,
+        lookup: suspend (CanvasProvider) -> CanvasArtwork?,
         accept: (CanvasArtwork) -> Boolean,
     ): CanvasArtwork? {
-        for (source in sources) {
-            val found = runCatching { source() }
+        for (provider in order) {
+            val found = runCatching { lookup(provider) }
                 .onFailure { Log.d(TAG, "source failed: ${it.message}") }
                 .getOrNull()
                 ?: continue

@@ -92,7 +92,11 @@ jobs:
           fi
 
       - name: Build Production Release APKs
-        run: ./gradlew :app:assembleProdRelease :tv:assembleProdRelease :wearos:assembleProdRelease --stacktrace
+        run: |
+          BUILD_TASKS=":app:assembleProdRelease"
+          if [ -d "tv" ]; then BUILD_TASKS="$BUILD_TASKS :tv:assembleProdRelease"; fi
+          if [ -d "wearos" ]; then BUILD_TASKS="$BUILD_TASKS :wearos:assembleProdRelease"; fi
+          ./gradlew $BUILD_TASKS --stacktrace
 
       - name: Prepare & Normalize Release Assets
         id: assets
@@ -111,19 +115,26 @@ jobs:
           mkdir -p release-assets
 
           # Stage Phone APKs
-          cp app/build/outputs/apk/prod/release/*universal*.apk release-assets/Miori-${TAG}.apk
-          cp app/build/outputs/apk/prod/release/*arm64-v8a*.apk release-assets/Miori-${TAG}_arm64-v8a.apk
-          cp app/build/outputs/apk/prod/release/*armeabi-v7a*.apk release-assets/Miori-${TAG}_armeabi-v7a.apk
-          cp app/build/outputs/apk/prod/release/*x86_64*.apk release-assets/Miori-${TAG}_x86_64.apk
+          cp app/build/outputs/apk/prod/release/*universal*.apk release-assets/Miori-${TAG}.apk 2>/dev/null || true
+          cp app/build/outputs/apk/prod/release/*arm64-v8a*.apk release-assets/Miori-${TAG}_arm64-v8a.apk 2>/dev/null || true
+          cp app/build/outputs/apk/prod/release/*armeabi-v7a*.apk release-assets/Miori-${TAG}_armeabi-v7a.apk 2>/dev/null || true
+          cp app/build/outputs/apk/prod/release/*x86_64*.apk release-assets/Miori-${TAG}_x86_64.apk 2>/dev/null || true
+          if ! ls release-assets/*.apk >/dev/null 2>&1; then
+            cp app/build/outputs/apk/prod/release/*.apk release-assets/Miori-${TAG}.apk 2>/dev/null || true
+          fi
 
           # Stage TV APKs
-          cp tv/build/outputs/apk/prod/release/*universal*.apk release-assets/MioriTV-${TAG}.apk
-          cp tv/build/outputs/apk/prod/release/*arm64-v8a*.apk release-assets/MioriTV-${TAG}_arm64-v8a.apk
-          cp tv/build/outputs/apk/prod/release/*armeabi-v7a*.apk release-assets/MioriTV-${TAG}_armeabi-v7a.apk
-          cp tv/build/outputs/apk/prod/release/*x86_64*.apk release-assets/MioriTV-${TAG}_x86_64.apk
+          if [ -d "tv" ]; then
+            cp tv/build/outputs/apk/prod/release/*universal*.apk release-assets/MioriTV-${TAG}.apk 2>/dev/null || true
+            cp tv/build/outputs/apk/prod/release/*arm64-v8a*.apk release-assets/MioriTV-${TAG}_arm64-v8a.apk 2>/dev/null || true
+            cp tv/build/outputs/apk/prod/release/*armeabi-v7a*.apk release-assets/MioriTV-${TAG}_armeabi-v7a.apk 2>/dev/null || true
+            cp tv/build/outputs/apk/prod/release/*x86_64*.apk release-assets/MioriTV-${TAG}_x86_64.apk 2>/dev/null || true
+          fi
 
           # Stage Wear OS APK
-          cp wearos/build/outputs/apk/prod/release/*.apk release-assets/MioriWear-${TAG}.apk
+          if [ -d "wearos" ]; then
+            cp wearos/build/outputs/apk/prod/release/*.apk release-assets/MioriWear-${TAG}.apk 2>/dev/null || true
+          fi
 
           # Generate SHA-256 Checksums
           cd release-assets
@@ -179,8 +190,6 @@ jobs:
           name: proguard-mappings-${{ env.RELEASE_TAG }}
           path: |
             app/build/outputs/mapping/prodRelease/mapping.txt
-            tv/build/outputs/mapping/prodRelease/mapping.txt
-            wearos/build/outputs/mapping/prodRelease/mapping.txt
           retention-days: 90
 
       - name: Backup Release Artifacts

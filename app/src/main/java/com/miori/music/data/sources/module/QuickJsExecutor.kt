@@ -1,6 +1,5 @@
 package com.miori.music.data.sources.module
 
-import android.util.Log
 import com.miori.music.data.TrackLog
 import com.dokar.quickjs.QuickJs
 import com.dokar.quickjs.binding.AsyncFunctionBinding

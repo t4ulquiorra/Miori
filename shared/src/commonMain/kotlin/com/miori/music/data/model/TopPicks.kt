@@ -42,7 +42,14 @@ enum class TopPickKind {
     /** Music the listener hasn't played yet — YouTube's Discover Mix. */
     DISCOVERY_STATION,
 
-    /** Apple Music's Made for You mixes (Chill Mix, Favorites Mix, etc.). */
+    /** The songns this listener plays most, from the app's own Replay stats. */
+    MOST_PLAYED,
+
+    /**
+     * One of Apple Music's named Made for You mixes (Chill, Favorites, Friends,
+     * Get Up!, New Music, Replay), drawn with the fluid blob cover. The name is
+     * in [TopPick.title]; the songs come from a mood, the history or a YouTube mix.
+     */
     MADE_FOR_YOU_MIX,
 }
 
@@ -155,11 +162,12 @@ data class TopPick(
     val exclude: List<String> = emptyList(),
     /** Words that steer a mood station toward the listener's own scene, e.g. "bollywood". */
     val hints: List<String> = emptyList(),
-    /** The tracks a [TopPickKind.MADE_FOR_YOU_MIX] card plays when built from songs. */
+    /** The tracks a [TopPickKind.MOST_PLAYED] card plays, in rank order. */
     val songs: List<TopPickSong> = emptyList(),
 ) {
     /**
-     * Page id for a Made for You Mix: YouTube playlist if available, else local mix page id.
+     * Page id halaman sebuah Made for You Mix: playlist YouTube-nya bila punya
+     * (New Music Mix), kalau tidak halaman `local:` yang diisi saat dibuka.
      */
     val mixPageId: String
         get() = watch?.playlistId
@@ -167,6 +175,9 @@ data class TopPick(
             ?.let { if (it.startsWith("VL")) it else "VL$it" }
             ?: "local:mix:$title"
 }
+
+/** Page id halaman Most Played: halaman `local:` yang langsung menampilkan lagunya, tanpa fetch. */
+const val MOST_PLAYED_BROWSE_ID = "local:most_played"
 
 /** A track kept inside a [TopPick], small enough to sit in the saved row. */
 @Serializable
@@ -183,4 +194,3 @@ data class TopPickSong(
         thumbnailUrl = thumbnailUrl,
     )
 }
-

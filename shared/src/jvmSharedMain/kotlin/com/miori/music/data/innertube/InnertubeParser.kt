@@ -306,6 +306,18 @@ object InnertubeParser {
         return HomeShelf(shelfTitle, items, strapline, layout = shelfLayoutFor(shelfTitle, items, fromList))
     }
 
+    /**
+     * Carousel yang dibawa halaman album di bawah daftar lagunya ("You might also like",
+     * "Other versions", "More by ..."), sebagai shelf sesuai urutan halaman. Hanya yang
+     * punya kartu yang bisa dibuka (album, playlist, artis) atau video yang bisa diputar;
+     * shelf dengan judul sama dibuang agar tidak dobel.
+     */
+    fun parseRelatedShelves(root: JsonElement): List<HomeShelf> =
+        collectRenderers(root, "musicCarouselShelfRenderer")
+            .mapNotNull(::carouselShelf)
+            .filter { shelf -> shelf.items.any { it.browseId != null || it.isVideo } }
+            .distinctBy { it.title }
+
     private fun plainShelf(shelf: JsonObject): HomeShelf? {
         val title = shelf.o("title").runs()
         val items = shelf.a("contents").orEmpty().mapNotNull {
@@ -770,6 +782,7 @@ object InnertubeParser {
             isExplicit = renderer.hasExplicitBadge(),
             // Extract the "Remove from history" feedback token from the row's menu, if present.
             feedbackToken = extractFeedbackToken(renderer),
+            playCount = playCountOf(columns),
         )
     }
 
@@ -1731,6 +1744,32 @@ object InnertubeParser {
     /** One unit of an episode's runtime — "2 hr", "43 min", "10 sec". */
     private val RUNTIME_PART = Regex("""(\d+)\s*(hours?|hr|min|sec)""", RegexOption.IGNORE_CASE)
     private val YEAR = Regex("""\d{4}""")
+    /** Satu segmen jumlah putar: "1.4M plays", "1.4B", atau "1,234,567". */
+    private val PLAY_COUNT = Regex("""([\d][\d.,]*)\s*([KMB])?(?:\s+(plays|views))?""", RegexOption.IGNORE_CASE)
+
+    /** Jumlah putar yang dicantumkan baris album di kolom setelah judul; null bila tidak ada. */
+    private fun playCountOf(columns: List<JsonElement>): Long? {
+        for (column in columns.drop(1)) {
+            val text = column.o("musicResponsiveListItemFlexColumnRenderer").o("text").a("runs").orEmpty()
+                .joinToString("") { it.s("text").orEmpty() }
+            for (segment in text.split(" • ")) {
+                val match = PLAY_COUNT.matchEntire(segment.trim()) ?: continue
+                val unit = match.groupValues[2].uppercase(Locale.ROOT)
+                // Angka telanjang (mis. tahun "2015") bukan jumlah putar: harus bersatuan,
+                // berkata plays/views, atau berpemisah ribuan.
+                if (unit.isEmpty() && match.groupValues[3].isEmpty() && !match.groupValues[1].contains(',')) continue
+                val value = match.groupValues[1].replace(",", "").toDoubleOrNull() ?: continue
+                val factor = when (unit) {
+                    "K" -> 1e3
+                    "M" -> 1e6
+                    "B" -> 1e9
+                    else -> 1.0
+                }
+                return (value * factor).toLong()
+            }
+        }
+        return null
+    }
     /**
      * A counted quantity rather than a name — "12.4M plays", "13 songs",
      * "1 hour, 4 minutes". Deliberately narrow: it has to leave "21 Savage"

@@ -19,73 +19,71 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * "Prefer music-only version": a music video is heard as its catalogue song,
- * and never starts as the video first.
+ * "Prefer music-only version": sebuah music video didengar sebagai lagu katalognya
+ * dan tidak pernah mulai diputar sebagai video dulu.
  *
- * [PlaybackService] converts the playing row and the next one, so a blend into
- * the next track is planned against the song rather than found to be a video
- * when it arrives. A converted row is an ordinary audio row — no `&m=1`, not
- * video-origin — which is all it takes for Automix, crossfade and the source
- * upgrade path to treat it like any other song. See [asMusicOnlyOf].
+ * [PlaybackService] mengonversi baris yang sedang diputar dan baris berikutnya,
+ * sehingga transisi ke lagu berikutnya sudah direncanakan terhadap lagunya, bukan
+ * baru ketahuan video saat tiba. Baris hasil konversi adalah baris audio biasa
+ * (tanpa `&m=1`, bukan video-origin), sehingga Automix, crossfade dan jalur upgrade
+ * kualitas memperlakukannya seperti lagu lain. Lihat [asMusicOnlyOf].
  *
- * Until a row has its answer its bytes are held above the cache, at
- * [holdingFactory], the same way [DirectSourceGate] holds a track at the
- * resolver: above, because a video already on disk would otherwise start at
- * once. The player sits buffering meanwhile, and replacing the row interrupts
- * the loader thread, which ends the wait.
+ * Sebelum sebuah baris punya jawabannya, byte-nya ditahan di [holdingFactory].
+ * Player buffering selama itu, dan mengganti baris menginterupsi thread loader
+ * sehingga penantian berakhir.
  *
- * A row with no audio version is let go — see [settle] — and plays the video's
- * own audio, without the picture.
+ * Baris tanpa versi audio dilepas ([settle]) dan memutar audio video itu sendiri,
+ * tanpa gambar.
  */
 object MusicOnlyPlayback {
 
     private const val TAG = "Miori"
 
-    /** How long a row waits for its audio version before playing the video's own audio. */
+    /** Berapa lama sebuah baris menunggu versi audionya sebelum memutar audio videonya sendiri. */
     const val ANSWER_TIMEOUT_MS = 15_000L
 
-    /** The hold's own limit, past [ANSWER_TIMEOUT_MS]: nothing may wait on the service forever. */
+    /** Batas penahanan itu sendiri, di atas [ANSWER_TIMEOUT_MS]: tidak ada yang boleh menunggu selamanya. */
     private const val HOLD_LIMIT_MS = ANSWER_TIMEOUT_MS + 5_000L
 
-    /** Videos the listener switched to by hand from the player, which stay videos. */
+    /** Video yang dipilih manual dari pemutar dan tetap menjadi video. */
     private val kept = MutableStateFlow<Set<String>>(emptySet())
 
-    /** Videos playing as themselves for now, because no audio version was found. */
+    /** Video yang sementara diputar apa adanya karena versi audionya tidak ditemukan. */
     private val settled = MutableStateFlow<Set<String>>(emptySet())
 
-    /** Never in a party, where everyone hears the one cut — see [ListenTogether]. */
+    /** Tidak pernah di party, tempat semua orang mendengar satu versi yang sama. */
     fun isActive(): Boolean =
-        AppSettings.preferMusicOnly.value && !ListenTogether.state.value.inParty
+        AppSettings.autoMusicOnly.value && !ListenTogether.state.value.inParty
 
-    /** Whether [videoId], a music video, shows its picture rather than its artwork. */
+    /** Apakah [videoId], sebuah music video, menampilkan gambarnya dan bukan sampul. */
     fun showsPicture(videoId: String): Boolean = !isActive() || videoId in kept.value
 
-    /** Whether this playback URI is a music video still owed its answer. */
+    /** Apakah URI pemutaran ini music video yang masih menunggu jawabannya. */
     fun holds(uri: Uri): Boolean {
         if (uri.scheme != "miori" || uri.authority != "watch") return false
-        // `m` marks a video row, and a row reverted by hand is that exact upload.
+        // `m` menandai baris video; baris yang dikembalikan manual adalah upload persis itu.
         if (uri.getQueryParameter("m") != "1") return false
         if (uri.getQueryParameter(DIRECT_YOUTUBE_PARAMETER) == "1") return false
         val videoId = mediaIdIn(uri) ?: return false
         return isActive() && videoId !in kept.value && videoId !in settled.value
     }
 
-    /** A download has no `miori` URI, so it is never converted: it is what's on the device. */
+    /** Unduhan tidak punya URI `miori`, jadi tidak pernah dikonversi: itu yang ada di perangkat. */
     fun wants(item: MediaItem): Boolean = item.localConfiguration?.uri?.let(::holds) == true
 
-    /** [videoId] plays as itself: no audio version, or none in time. */
+    /** [videoId] diputar apa adanya: tidak ada versi audio, atau tidak tepat waktu. */
     fun settle(videoId: String) = settled.update { it + videoId }
 
-    /** A later play asks again, as a failed lookup may only have been the network. */
+    /** Putar berikutnya bertanya lagi, karena lookup yang gagal mungkin hanya jaringan. */
     fun forgetExcept(videoIds: Set<String>) = settled.update { it intersect videoIds }
 
-    /** The listener switched to [videoId] by hand. */
+    /** Pendengar memilih [videoId] secara manual. */
     fun keep(videoId: String) = kept.update { it + videoId }
 
-    /** The listener switched away from [videoId] by hand. */
+    /** Pendengar berpindah dari [videoId] secara manual. */
     fun letGo(videoId: String) = kept.update { it - videoId }
 
-    /** The setting changed, so nothing decided under the old value stands. */
+    /** Pengaturan berubah, jadi keputusan lama tidak berlaku lagi. */
     fun reset() {
         kept.value = emptySet()
         settled.value = emptySet()
@@ -94,7 +92,7 @@ object MusicOnlyPlayback {
     private suspend fun awaitAnswer(videoId: String) {
         withTimeoutOrNull(HOLD_LIMIT_MS) {
             combine(
-                AppSettings.preferMusicOnly,
+                AppSettings.autoMusicOnly,
                 ListenTogether.state,
                 kept,
                 settled,
@@ -104,7 +102,7 @@ object MusicOnlyPlayback {
         }
     }
 
-    /** [upstream], except that a music video owed its answer does not open until it has one. */
+    /** [upstream], kecuali music video yang menunggu jawaban tidak dibuka sampai ada jawabannya. */
     @OptIn(UnstableApi::class)
     fun holdingFactory(upstream: DataSource.Factory): DataSource.Factory = DataSource.Factory {
         val inner = upstream.createDataSource()
@@ -135,10 +133,10 @@ object MusicOnlyPlayback {
 }
 
 /**
- * This audio version, standing in [video]'s place in the queue.
+ * Versi audio ini, menggantikan [video] di antrean.
  *
- * Not video-origin, unlike the player menu's switch: that flag is what keeps
- * Automix off a row, and the point of converting ahead of time is to have it on.
+ * Bukan video-origin, tidak seperti tombol di menu pemutar: flag itu yang menjauhkan
+ * Automix dari sebuah baris, padahal inti konversi di awal adalah agar Automix aktif.
  */
 fun Song.asMusicOnlyOf(video: Song): Song = copy(
     isVideoOrigin = false,

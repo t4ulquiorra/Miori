@@ -40,8 +40,6 @@ import com.miori.music.data.AppUpdateChecker
 import com.miori.music.data.settings.AppSettings
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
-import dev.chrisbanes.haze.materials.HazeMaterials
-
 /** UIAlertController's own metrics: fixed narrow width, 14pt corner, 44pt rows. */
 internal val ALERT_WIDTH = 270.dp
 internal val ALERT_CORNER = 14.dp
@@ -90,47 +88,43 @@ fun UpdateAvailableDialog(
     onInstall: () -> Unit,
     onOpenReleasePage: () -> Unit,
     modifier: Modifier = Modifier,
+    /** True once the update is overdue: no scrim dismiss and no Later / Remind Me Later. */
+    mandatory: Boolean = false,
 ) {
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val state by AppUpdateChecker.download.collectAsStateWithLifecycle()
     val shape = RoundedCornerShape(ALERT_CORNER)
+    val motion = rememberMacOSPopupState(onClosed = onDismiss)
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(SCRIM_COLOR)
-            // Tapping the scrim reads the same as Remind Me Later — nothing
-            // about this update is mandatory, so backing out of it should be as
-            // easy as getting into it. Mid-download it only closes the sheet;
-            // the download keeps going and the top-bar icon reopens this.
+            .macOSPopupScrim(motion, SCRIM_COLOR)
+            // Tapping the scrim reads the same as Remind Me Later, unless the
+            // update is overdue (mandatory): then the scrim does nothing.
+            // Mid-download it only closes the sheet; the download keeps going
+            // and the top-bar icon reopens this.
             .clickable(
                 indication = null,
                 interactionSource = remember { MutableInteractionSource() },
-                onClick = onDismiss,
+                onClick = { if (!mandatory) motion.requestClose() },
             ),
         contentAlignment = Alignment.Center,
     ) {
         Column(
             modifier = Modifier
                 .width(ALERT_WIDTH)
+                .macOSPopupMotion(motion)
                 .clip(shape)
-                .then(
-                    if (reduceDynamicBlur) {
-                        Modifier.background(MaterialTheme.colorScheme.surface)
-                    } else {
-                        Modifier.optimizedHazeEffect(
-                            state = hazeState,
-                            style = HazeMaterials.regular(MaterialTheme.colorScheme.surface),
-                        )
-                    },
-                )
+                .alertSurface(hazeState, frosted = true, shape = shape)
                 // Swallows the tap before it reaches the scrim behind, so
                 // touching the card itself never dismisses it.
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() },
                     onClick = {},
-                ),
+                )
+                .macOSPopupContent(motion),
         ) {
             Column(
                 modifier = Modifier
@@ -156,7 +150,11 @@ fun UpdateAvailableDialog(
                         is AppUpdateChecker.DownloadState.Failed ->
                             stringResource(R.string.update_failed_body, version)
                         else ->
-                            stringResource(R.string.update_available_body, version)
+                            if (mandatory) {
+                                stringResource(R.string.update_required_body, version)
+                            } else {
+                                stringResource(R.string.update_available_body, version)
+                            }
                     },
                     modifier = Modifier.padding(top = 4.dp),
                     style = MaterialTheme.typography.bodyMedium.copy(
@@ -246,8 +244,10 @@ fun UpdateAvailableDialog(
                 }
                 is AppUpdateChecker.DownloadState.Ready -> {
                     AlertAction(label = stringResource(R.string.install_now), emphasised = true, onClick = onInstall)
-                    AlertRule()
-                    AlertAction(label = stringResource(R.string.later), emphasised = false, onClick = onDismiss)
+                    if (!mandatory) {
+                        AlertRule()
+                        AlertAction(label = stringResource(R.string.later), emphasised = false, onClick = onDismiss)
+                    }
                 }
                 is AppUpdateChecker.DownloadState.Failed -> {
                     AlertAction(label = stringResource(R.string.try_again), emphasised = true, onClick = onDownload)
@@ -256,8 +256,10 @@ fun UpdateAvailableDialog(
                 }
                 else -> {
                     AlertAction(label = stringResource(R.string.download_now), emphasised = true, onClick = onDownload)
-                    AlertRule()
-                    AlertAction(label = stringResource(R.string.remind_me_later), emphasised = false, onClick = onDismiss)
+                    if (!mandatory) {
+                        AlertRule()
+                        AlertAction(label = stringResource(R.string.remind_me_later), emphasised = false, onClick = onDismiss)
+                    }
                 }
             }
         }

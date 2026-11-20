@@ -34,6 +34,16 @@ val lastfmSecret: String = (
         ?: System.getenv("LASTFM_SECRET")
         ?: ""
     ).trim()
+val canvasSecret: String = (
+    localProps.getProperty("CANVAS_SECRET")
+        ?: System.getenv("CANVAS_SECRET")
+        ?: ""
+    ).trim()
+val debugSecret: String = (
+    localProps.getProperty("DEBUG_SECRET")
+        ?: System.getenv("DEBUG_SECRET")
+        ?: ""
+    ).trim()
 
 /*
  * Where Listen Together's party server lives. Not a credential — it is a public
@@ -54,16 +64,14 @@ val listenTogetherServer: String = (
     ).trim().trimEnd('/')
 
 /*
- * The service that checks this app's hardware key attestation and issues addon
- * tokens. See AddonAuth. Overridable for a staging deployment. A fork that
- * points this at its own server gains nothing: addons only trust tokens signed
- * by the official service's key.
+ * Repo "owner/name" yang dicek in-app updater untuk release terbaru. Di GitHub
+ * Actions otomatis terisi repo fork kamu (GITHUB_REPOSITORY). Kosong = updater mati.
  */
-val addonAuthServer: String = (
-    localProps.getProperty("ADDON_AUTH_SERVER")
-        ?: System.getenv("ADDON_AUTH_SERVER")
-        ?: "https://miori-auth.kushagrasingh.in"
-    ).trim().trimEnd('/')
+val updateRepo: String = (
+    localProps.getProperty("UPDATE_REPO")
+        ?: System.getenv("GITHUB_REPOSITORY")
+        ?: ""
+    ).trim()
 
 // See the root build.gradle.kts: one version for the phone and its watch app.
 val betaSuffix = rootProject.extra["mioriBetaSuffix"] as String
@@ -79,6 +87,23 @@ android {
         // Haze falls back to a translucent scrim below that.
         minSdk = 26
         targetSdk = 36
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+        // Native build cache: only when ccache is installed, so builds without it still work.
+        externalNativeBuild {
+            cmake {
+                val hasCcache = (System.getenv("PATH") ?: "")
+                    .split(File.pathSeparator)
+                    .any { File(it, "ccache").canExecute() }
+                if (hasCcache) {
+                    arguments += listOf(
+                        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                    )
+                }
+            }
+        }
         versionCode = rootProject.extra["mioriVersionCode"] as Int
         versionName = rootProject.extra["mioriVersionName"] as String
 
@@ -92,31 +117,16 @@ android {
             "LISTEN_TOGETHER_SERVER",
             "\"${listenTogetherServer.replace("\\", "\\\\").replace("\"", "\\\"")}\"",
         )
-        buildConfigField(
-            "String",
-            "ADDON_AUTH_URL",
-            "\"${addonAuthServer.replace("\\", "\\\\").replace("\"", "\\\"")}\"",
-        )
         // Which release assets are this app's: the phone and TV APKs ship in
         // the same GitHub release, told apart by file name. See
         // AppUpdateChecker.apkAssetUrl.
+        buildConfigField("String", "CANVAS_SECRET", "\"$canvasSecret\"")
+        buildConfigField("String", "DEBUG_SECRET", "\"${debugSecret.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
         buildConfigField("String", "UPDATE_APK_PREFIX", "\"Miori-\"")
+        buildConfigField("String", "UPDATE_REPO", "\"${updateRepo.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("armeabi-v7a", "arm64-v8a", "x86_64")
-            isUniversalApk = true
-        }
-    }
 
-    // The phone <-> watch protocol, one file shared with the watch app so the
-    // two cannot drift. See wearos/protocol/.../WearProtocol.kt.
-    sourceSets {
-        getByName("main") { java.srcDir("../wearos/protocol") }
-    }
 
     externalNativeBuild {
         cmake {
@@ -132,7 +142,7 @@ android {
     productFlavors {
         create("dev") {
             dimension = "env"
-            applicationId = "com.dev.miori"
+            applicationId = "com.miori.music.dev"
             resValue("string", "app_name", "Miori Dev")
         }
         create("prod") {
@@ -210,6 +220,14 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    androidResources {
+        // Model ONNX tetap di repo tetapi tidak dibundel; app mengunduhnya saat dibutuhkan.
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:!*.onnx"
+    }
+    androidResources {
+        // Model ONNX tetap di repo tetapi tidak dibundel; app mengunduhnya lewat popup Automix.
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:!*.onnx"
+    }
     packaging {
         resources {
             // SMBJ's BouncyCastle and jspecify both ship this descriptor.
@@ -221,6 +239,13 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+    lint {
+        // assembleRelease otherwise runs lintVitalAnalyze + lintVitalReport over
+        // the whole app (minutes on a project this size). The release build here
+        // is produced by CI for sideloading, not gated on lint.
+        checkReleaseBuilds = false
+        abortOnError = false
     }
     testOptions {
         unitTests {
@@ -427,25 +452,6 @@ dependencies {
     implementation("com.google.android.gms:play-services-cast-framework:22.2.0")
     implementation("androidx.mediarouter:mediarouter:1.8.1")
 
-    // ---- The watch app (wearos/): Data Layer state out, commands in ----
-    // See com.miori.music.wear.WearBridge. Rides on the Play services base
-    // the Cast framework already brings, so it adds very little.
-    implementation("com.google.android.gms:play-services-wearable:20.0.1")
-    // Opens the watch app after an update, so its install prompt is on screen.
-    implementation("androidx.wear:wear-remote-interactions:1.1.0")
-
-    // ---- "Miori for Wear OS": the first install onto a watch ----
-    // Without the Play Store only ADB can install on a watch, so this phone is
-    // the ADB client, over the watch's Wireless debugging — see WatchInstaller.
-    // GPL-3.0/Apache-2.0 dual-licensed. Its own BouncyCastle (jdk15to18) is the
-    // same classes as the jdk18on one SMBJ already brings, so it is excluded;
-    // bcpkix supplies the certificate the ADB client identifies itself with.
-    implementation("com.github.MuntashirAkon:libadb-android:3.1.1") {
-        exclude(group = "org.bouncycastle")
-    }
-    implementation("org.conscrypt:conscrypt-android:2.5.3")
-    implementation("org.bouncycastle:bcpkix-jdk18on:1.85")
-
     testImplementation("junit:junit:4.13.2")
     // A real HTTP server for the addon tests. The addon protocol is entirely
     // "what does this app send, and what does it do with what comes back", and
@@ -481,69 +487,13 @@ val verifyDevInstall = tasks.register("verifyDevInstall") {
             .drop(1)
             .mapNotNull { line -> line.split('\t').takeIf { it.size == 2 && it[1] == "device" }?.get(0) }
         serials.forEach { serial ->
-            logger.lifecycle("verifyDevInstall: compiling com.dev.miori on $serial")
+            logger.lifecycle("verifyDevInstall: compiling com.miori.music.dev on $serial")
             ProcessBuilder(
                 adbPath, "-s", serial, "shell", "cmd", "package", "compile",
-                "-m", "verify", "-f", "com.dev.miori",
+                "-m", "verify", "-f", "com.miori.music.dev",
             ).inheritIO().start().waitFor()
         }
     }
 }
 tasks.matching { it.name == "installDevDebug" }.configureEach { finalizedBy(verifyDevInstall) }
 
-/*
- * The watch app rides inside the phone app, so "Miori for Wear OS" in
- * Settings can put it on a watch — or update it — with no computer involved.
- *
- * Each phone variant carries the watch build of the same flavor *and* build
- * type: the same package (dev with dev, prod with prod) and the same signing
- * key, which is what the Wearable Data Layer needs before the two will talk at
- * all. A SHA-256 travels with it, so the phone can tell the watch's build from
- * the one it carries even when the version numbers match.
- *
- * Costs a watch build per phone build; -Pmiori.bundleWear=false skips it
- * for a quick local iteration (Settings then offers no install).
- */
-abstract class BundleWearApk : DefaultTask() {
-    @get:InputFiles
-    abstract val apks: ConfigurableFileCollection
-
-    @get:OutputDirectory
-    abstract val outputDir: DirectoryProperty
-
-    @TaskAction
-    fun bundle() {
-        val out = outputDir.get().asFile.resolve("wear")
-        out.deleteRecursively()
-        out.mkdirs()
-        val apk = apks.asFileTree.matching { include("*.apk") }.files.singleOrNull()
-            ?: throw GradleException("Expected exactly one watch APK in ${apks.files}")
-        val target = out.resolve("MioriWear.apk")
-        apk.copyTo(target, overwrite = true)
-        val digest = MessageDigest.getInstance("SHA-256")
-        target.inputStream().use { input ->
-            val buffer = ByteArray(64 * 1024)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                digest.update(buffer, 0, read)
-            }
-        }
-        out.resolve("MioriWear.sha256").writeText(digest.digest().joinToString("") { "%02x".format(it) })
-    }
-}
-
-if (providers.gradleProperty("miori.bundleWear").orNull != "false" && findProject(":wearos") != null) {
-    androidComponents.onVariants { variant ->
-        val flavor = variant.productFlavors.firstOrNull { it.first == "env" }?.second ?: return@onVariants
-        val type = variant.buildType ?: return@onVariants
-        // The benchmark build has no watch counterpart.
-        if (type != "debug" && type != "release") return@onVariants
-        val cap = variant.name.replaceFirstChar { it.uppercase() }
-        val bundle = tasks.register<BundleWearApk>("bundleWearApk$cap") {
-            dependsOn(":wearos:assemble$cap")
-            apks.from(rootProject.layout.projectDirectory.dir("wearos/build/outputs/apk/$flavor/$type"))
-        }
-        variant.sources.assets?.addGeneratedSourceDirectory(bundle, BundleWearApk::outputDir)
-    }
-}

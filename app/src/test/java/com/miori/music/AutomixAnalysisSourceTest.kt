@@ -2,7 +2,6 @@ package com.miori.music
 
 import com.miori.music.playback.smart.AutomixAnalysisSource
 import com.miori.music.playback.QualityUpgrade
-import com.miori.music.data.sources.StreamFormat
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
 import org.junit.Test

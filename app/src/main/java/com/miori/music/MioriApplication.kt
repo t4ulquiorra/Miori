@@ -58,6 +58,7 @@ class MioriApplication : Application(), SingletonImageLoader.Factory, Configurat
     @kotlin.OptIn(ExperimentalComposeUiApi::class)
     override fun onCreate() {
         super.onCreate()
+        AppIcon.repairLauncher(this)
         // The player is drawn by the shared UI module; this is what it reads
         // underneath — settings, the Canvas decoder, outputs, the party.
         AndroidStreamHooks.installEarly()
@@ -118,7 +119,7 @@ class MioriApplication : Application(), SingletonImageLoader.Factory, Configurat
             // never sized for. See CanvasCache's doc for why this one exists at
             // all — it is the fix for canvas clips re-fetching the same few
             // seconds of video from the network on every loop.
-            CanvasCache.init(this)
+            // CanvasCache is opened below, after AppSettings: its ceiling is a setting.
         }
         // Migration-safe: an old single cookie becomes the first encrypted
         // session, while newer installs restore the profile the listener chose.
@@ -142,9 +143,11 @@ class MioriApplication : Application(), SingletonImageLoader.Factory, Configurat
             CoroutineScope(Dispatchers.IO).launch { Innertube.ensureSessionScope() }
         }
         AppSettings.init(this, authStore)
-        // Restores the addon token, so the first search after a process restart
-        // doesn't have to attest the device again.
-        com.miori.music.data.sources.addon.AddonAuth.init(this)
+        // Cache halaman browse (album, artis, explore) di disk: hemat data dan tetap tampil offline.
+        Innertube.browseCacheDir = cacheDir.resolve("browse_cache")
+        // Lirik yang sudah ketemu + jawaban lookup artis Apple, juga di disk.
+        com.miori.music.data.lyrics.LyricsDiskCache.dir = cacheDir.resolve("lyrics_cache")
+        com.miori.music.data.canvas.AppleArtistArtRepository.init(cacheDir.resolve("apple_artist_art.json"))
         // Before anything resolves a track: an addon with `checkValidLossless`
         // is gated on this, and the gate reads "no" until it has looked.
         com.miori.music.playback.audio.LosslessOutput.init(this)
@@ -175,6 +178,7 @@ class MioriApplication : Application(), SingletonImageLoader.Factory, Configurat
         // One cache directory can only be opened once per process, and
         // PlaybackService shares this one — so it's opened here, not there.
         AudioCache.init(this)
+        CanvasCache.init(this)
         // The offscreen WebView that mints a Spotify access token from the
         // listener's own session cookie needs a Context, and nothing in the
         // suspend call chain that reaches it (a track's canvas lookup) has
@@ -218,10 +222,29 @@ class MioriApplication : Application(), SingletonImageLoader.Factory, Configurat
                     chain.request().newBuilder()
                         .header(
                             "User-Agent",
-                            "Miori/${BuildConfig.VERSION_NAME} (Android; +https://github.com/t4ulquiorra/Miori)",
+                            "Miori/${BuildConfig.VERSION_NAME} (Android; +https://github.com/kushagrasinghx/Miori)",
                         )
                         .build(),
                 )
+            }
+            // Gambar (foto akun, cover liked, dll.) sering dikirim server dengan
+            // no-cache / max-age pendek, sehingga Coil mengunduh ulang tiap app dibuka
+            // dan gagal saat offline. Di sini header-nya diganti supaya cache disk
+            // dianggap segar 30 hari: tanpa request jaringan, dan tetap tampil offline.
+            .addInterceptor { chain ->
+                val response = chain.proceed(chain.request())
+                val type = response.header("Content-Type").orEmpty()
+                if (response.isSuccessful && (type.isEmpty() || type.startsWith("image/"))) {
+                    response.newBuilder()
+                        .removeHeader("Pragma")
+                        .removeHeader("Vary")
+                        .removeHeader("Expires")
+                        .removeHeader("Age")
+                        .header("Cache-Control", "public, max-age=2592000")
+                        .build()
+                } else {
+                    response
+                }
             }
             .build()
     }
@@ -246,6 +269,11 @@ class MioriApplication : Application(), SingletonImageLoader.Factory, Configurat
                 // Covers filed on the SMB share; anything else falls
                 // through to Coil's own fetchers. See SmbCoverFetcher.
                 add(SmbCoverFetcher.Factory())
+                // Covers of files on the device: the tag's embedded picture,
+                // which MediaStore's legacy album-art URI no longer serves.
+                add(com.miori.music.data.LocalArtMapper())
+                add(com.miori.music.data.LocalArtKeyer())
+                add(com.miori.music.data.LocalArtFetcher.Factory())
                 // Artist signatures are usually SVG, which Coil can't
                 // decode without this. See ArtistSignatureRepository.
                 add(SvgDecoder.Factory())
@@ -260,7 +288,7 @@ class MioriApplication : Application(), SingletonImageLoader.Factory, Configurat
             .diskCache {
                 DiskCache.Builder()
                     .directory(cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(100L * 1024 * 1024)
+                    .maxSizeBytes(200L * 1024 * 1024)
                     .build()
             }
             // Covers arriving with a hard cut read as the list flickering as

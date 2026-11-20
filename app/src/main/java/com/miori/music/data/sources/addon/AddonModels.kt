@@ -47,16 +47,16 @@ data class AddonManifest(
     /**
      * The settings schema the addon declares, when it declares one.
      *
-     * Read mostly for its *defaults*. The protocol has the host render a form
-     * for these and send whatever the user picked back as query parameters on
-     * every request; Miori draws that form for `quality` alone — see
-     * [qualityOptions] — and sends the declared defaults for the rest. That is
-     * explicitly enough — the spec says an addon "that never reads a setting
-     * still behaves correctly", and the default is what the reference host
-     * sends until a user changes something. What it buys is the addon that
-     * gates its lossless tier behind a `quality` setting: sending nothing
-     * leaves that addon on whatever its server-side default happens to be,
-     * which is not always the one it advertises.
+     * Read for its *defaults*, not to build a UI. The protocol has the host
+     * render a form for these and send whatever the user picked back as query
+     * parameters on every request; Miori has no such form, so it sends the
+     * declared defaults instead. That is explicitly enough — the spec says an
+     * addon "that never reads a setting still behaves correctly", and the
+     * default is what the reference host sends until a user changes something.
+     * What it buys is the addon that gates its lossless tier behind a
+     * `quality` setting: sending nothing leaves that addon on whatever its
+     * server-side default happens to be, which is not always the one it
+     * advertises.
      */
     @SerialName("settings") val settings: List<AddonSetting> = emptyList(),
     /**
@@ -72,17 +72,7 @@ data class AddonManifest(
      * Read through [requiresLosslessOutput].
      */
     @SerialName("checkValidLossless") val checkValidLossless: JsonElement? = null,
-    /**
-     * `mioriAuth`: the addon only serves the genuine Miori app, so every
-     * request has to carry [AddonAuth]'s token and proof. Absent means nothing
-     * is sent. An addon that leaves it out but answers `401` with
-     * `WWW-Authenticate: Miori` is handled the same way, one round trip
-     * later. Read through [requiresMioriAuth].
-     */
-    @SerialName("mioriAuth") val mioriAuth: JsonElement? = null,
 ) {
-    val requiresMioriAuth: Boolean get() = mioriAuth.asFlag() ?: false
-
     val downloadsAllowed: Boolean get() = allowDownloads.asFlag() ?: true
 
     val requiresLosslessOutput: Boolean get() = checkValidLossless.asFlag() ?: false
@@ -128,11 +118,10 @@ data class AddonManifest(
  * One declared setting, reduced to the two things this app does with it.
  *
  * [default] is what gets sent, and [options] is what a `quality` request is
- * matched against and what its picker lists — see [AddonClient.settingsFor]. The
- * rest of the schema is a form description: a type, a label, a help line,
- * bounds. The reference host renders a form from those; this app draws only the
- * one picker, in its own words, and carrying fields nothing reads would make the
- * class look like it presents a UI it has no part in.
+ * matched against — see [AddonClient.settingsFor]. The rest of the schema is a
+ * form description: a type, a label, a help line, bounds. The reference host
+ * renders a form from those; this app does not, and carrying fields nothing
+ * reads would make the class look like it presents a UI it has no part in.
  */
 @Serializable
 data class AddonSetting(
@@ -144,7 +133,7 @@ data class AddonSetting(
     val defaultValue: String? get() = default?.asQueryValue()
 }
 
-/** One choice in a select. Only the value travels; the label is the host's to draw. */
+/** One choice in a select. The value is what travels; the label is only what the picker shows. */
 @Serializable
 data class AddonSettingOption(
     @SerialName("value") val value: JsonElement? = null,

@@ -1,5 +1,6 @@
 package com.miori.music.ui.icons
 
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.SolidColor
@@ -9,6 +10,19 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
+
+/**
+ * The share glyph every share button draws. [MioriIcons.Share] by default; the
+ * app provides its SF Symbol one, so screens in this module and the app's own
+ * screens show the same Apple Music style glyph.
+ */
+val LocalShareIcon = staticCompositionLocalOf { MioriIcons.Share }
+
+/**
+ * The close glyph for floating action bars. [MioriIcons.Close] by default; the
+ * app provides its SF Symbol one so the bars match the rest of its icons.
+ */
+val LocalCloseIcon = staticCompositionLocalOf { MioriIcons.Close }
 
 /**
  * Thick-stroke, round-capped icons in the spirit of Telegram's modern icon set.
@@ -21,6 +35,40 @@ object MioriIcons {
 
     private const val STROKE = 2.2f
     private val stroke = SolidColor(Color.Black)
+
+    /**
+     * Apple Music's share glyph (SF Symbol "square.and.arrow.up"): an open-topped
+     * box with an arrow rising out of it. Read through [LocalShareIcon].
+     */
+    val Share: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_share", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke, strokeLineWidth = STROKE,
+                strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+            ) {
+                // The box, open where the arrow leaves it.
+                moveTo(8.5f, 9f)
+                lineTo(7f, 9f)
+                quadTo(4.5f, 9f, 4.5f, 11.5f)
+                lineTo(4.5f, 18.5f)
+                quadTo(4.5f, 21f, 7f, 21f)
+                lineTo(17f, 21f)
+                quadTo(19.5f, 21f, 19.5f, 18.5f)
+                lineTo(19.5f, 11.5f)
+                quadTo(19.5f, 9f, 17f, 9f)
+                lineTo(15.5f, 9f)
+                // The arrow: shaft, then head.
+                moveTo(12f, 14.5f)
+                lineTo(12f, 3.5f)
+                moveTo(8.4f, 7f)
+                lineTo(12f, 3.4f)
+                lineTo(15.6f, 7f)
+            }
+        }.build()
+    }
 
     /** Compact list and quotation-bubble shapes used by the player controls. */
     val Queue: ImageVector by lazy {
@@ -41,6 +89,58 @@ object MioriIcons {
                     arcToRelative(1.25f, 1.25f, 0f, true, true, 2.5f, 0f)
                     close()
                 }
+            }
+        }.build()
+    }
+
+    /** Apple Music's "Play Next": a play mark leading the first row of a short list. */
+    val PlayNext: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_play_next", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(stroke = stroke, strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round) {
+                moveTo(12.5f, 6f)
+                lineTo(21f, 6f)
+                moveTo(3f, 12f)
+                lineTo(21f, 12f)
+                moveTo(3f, 18f)
+                lineTo(21f, 18f)
+            }
+            path(
+                fill = stroke, stroke = stroke, strokeLineWidth = 1.4f,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(3.5f, 3.3f)
+                lineTo(9.2f, 6f)
+                lineTo(3.5f, 8.7f)
+                close()
+            }
+        }.build()
+    }
+
+    /** "Play Last": the same list with the play mark closing the final row. */
+    val PlayLast: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_play_last", defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(stroke = stroke, strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round) {
+                moveTo(3f, 6f)
+                lineTo(21f, 6f)
+                moveTo(3f, 12f)
+                lineTo(21f, 12f)
+                moveTo(3f, 18f)
+                lineTo(12.5f, 18f)
+            }
+            path(
+                fill = stroke, stroke = stroke, strokeLineWidth = 1.4f,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(15.5f, 15.3f)
+                lineTo(21.2f, 18f)
+                lineTo(15.5f, 20.7f)
+                close()
             }
         }.build()
     }
@@ -179,12 +279,25 @@ object MioriIcons {
      * just past the em box, and the viewport would clip it flat.
      */
     val TabLibrary: ImageVector by lazy {
-        fontGlyph(
-            "bc_tab_library",
-            "M154 27.24Q156 0.24 185 0.24H322Q352 0.24 353 27.24Z" +
-                "M116 87.24Q121 56.24 150 56.24H356Q385 56.24 390 87.24Z" +
-                "M133 500.24Q66 500.24 66 434.24V187.24Q66 121.24 133 121.24H378Q446 121.24 446 187.24V434.24Q446 500.24 385 500.24Z",
-        )
+        // Apple Music's album stack, solid and without lettering: two edges of
+        // the cards behind and the front card.
+        ImageVector.Builder(
+            name = "bc_tab_library_plain",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 512f, viewportHeight = 512f,
+        ).addPath(
+            pathData = addPathNodes(
+                "M154 27.24Q156 0.24 185 0.24H322Q352 0.24 353 27.24Z" +
+                    "M116 87.24Q121 56.24 150 56.24H356Q385 56.24 390 87.24Z" +
+                    "M133 500.24Q66 500.24 66 434.24V187.24Q66 121.24 133 121.24H378Q446 121.24 446 187.24V434.24Q446 500.24 385 500.24Z" +
+                    // Beamed double note, cut out of the front card (even-odd): one outline, two heads joined by a beam.
+                    // Shifted 9 left and 3 up from its bounding-box centre: the heads
+                    // sit low and to the left, so the mass reads off-centre otherwise.
+                    "M210.8 219.5L344.1 192.8L344.1 365.5A39.9 30.5 0 1 1 325.2 339.5L325.2 234.4L229.7 253.5L229.7 391.7A39.9 30.5 0 1 1 210.8 365.8L210.8 257.3Z",
+            ),
+            pathFillType = androidx.compose.ui.graphics.PathFillType.EvenOdd,
+            fill = stroke,
+        ).build()
     }
 
     val TabSearch: ImageVector by lazy {
@@ -275,36 +388,100 @@ object MioriIcons {
         }.build()
     }
 
-    val Repeat: ImageVector by lazy { repeatLoop("bc_repeat") }
+    val Repeat: ImageVector by lazy { repeatArrows("bc_repeat", one = false) }
+
+    /** [Repeat] with the 1 of repeat-one beside the top arrow, as Apple Music draws it. */
+    val RepeatOne: ImageVector by lazy { repeatArrows("bc_repeat_one", one = true) }
 
     /**
-     * Two straight runs joined by semicircles, with the arrow heads lying flat
-     * at the ends of the straights. Putting them on the curves instead — as a
-     * first pass did — makes the glyph read as a refresh/sync symbol.
+     * Apple Music's repeat glyph (SF Symbol "repeat"): two strands with rounded
+     * corners, a solid arrow head on each, the top one pointing right and the
+     * bottom one left. With [one] the top strand stops short to leave room for
+     * the 1.
      */
-    private fun repeatLoop(name: String): ImageVector =
+    private fun repeatArrows(name: String, one: Boolean): ImageVector =
         ImageVector.Builder(
             name = name,
             defaultWidth = 24.dp, defaultHeight = 24.dp,
             viewportWidth = 24f, viewportHeight = 24f,
         ).apply {
+            val topEnd = if (one) 9.0f else 16.0f
+            val headBase = if (one) 8.4f else 15.4f
+            val headTip = if (one) 12.4f else 19.4f
             path(
                 stroke = stroke,
                 strokeLineWidth = STROKE,
                 strokeLineCap = StrokeCap.Round,
                 strokeLineJoin = StrokeJoin.Round,
             ) {
-                moveTo(8.6f, 7.6f)
-                lineTo(15.4f, 7.6f)
-                arcToRelative(4.4f, 4.4f, 0f, isMoreThanHalf = false, isPositiveArc = true, 0f, 8.8f)
-                lineTo(8.6f, 16.4f)
-                arcToRelative(4.4f, 4.4f, 0f, isMoreThanHalf = false, isPositiveArc = true, 0f, -8.8f)
-                close()
-                // Direction of travel: right along the top, left along the bottom.
-                moveTo(13.5f, 5.7f); lineTo(15.4f, 7.6f); lineTo(13.5f, 9.5f)
-                moveTo(10.5f, 14.5f); lineTo(8.6f, 16.4f); lineTo(10.5f, 18.3f)
+                // Top strand: up from the left, across to the right.
+                moveTo(4.6f, 12.4f)
+                lineTo(4.6f, 9.8f)
+                arcToRelative(2.4f, 2.4f, 0f, isMoreThanHalf = false, isPositiveArc = true, 2.4f, -2.4f)
+                lineTo(topEnd, 7.4f)
+                // Bottom strand: down from the right, back across to the left.
+                moveTo(19.4f, 11.6f)
+                lineTo(19.4f, 14.2f)
+                arcToRelative(2.4f, 2.4f, 0f, isMoreThanHalf = false, isPositiveArc = true, -2.4f, 2.4f)
+                lineTo(8.0f, 16.6f)
+            }
+            path(
+                fill = stroke,
+                stroke = stroke,
+                strokeLineWidth = 1.2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                // Top arrow head, pointing right.
+                moveTo(headBase, 4.9f); lineTo(headTip, 7.4f); lineTo(headBase, 9.9f); close()
+                // Bottom arrow head, pointing left.
+                moveTo(8.6f, 14.1f); lineTo(4.6f, 16.6f); lineTo(8.6f, 19.1f); close()
+            }
+            if (one) {
+                path(
+                    stroke = stroke,
+                    strokeLineWidth = 1.9f,
+                    strokeLineCap = StrokeCap.Round,
+                    strokeLineJoin = StrokeJoin.Round,
+                ) {
+                    moveTo(16.8f, 5.8f); lineTo(19.4f, 4.0f); lineTo(19.4f, 10.6f)
+                }
             }
         }.build()
+
+    /** Automix: a ring beside a record disc with a centre hole. */
+    val Automix: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_automix",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            // Left ring, a little softer than the disc beside it. An open arc that
+            // stops where it meets the disc's edge, with the same outer radius as the disc.
+            path(
+                stroke = SolidColor(Color.Black.copy(alpha = 0.7f)),
+                strokeLineWidth = 1.9f,
+                strokeLineCap = StrokeCap.Round,
+            ) {
+                moveTo(11.16f, 8.27f)
+                arcTo(4.83f, 4.83f, 0f, isMoreThanHalf = true, isPositiveArc = false, 11.16f, 15.73f)
+            }
+            // Right disc with its centre hole cut out.
+            path(
+                fill = SolidColor(Color.Black),
+                pathFillType = androidx.compose.ui.graphics.PathFillType.EvenOdd,
+            ) {
+                moveTo(9.79f, 12f)
+                arcToRelative(5.78f, 5.78f, 0f, isMoreThanHalf = true, isPositiveArc = true, 11.56f, 0f)
+                arcToRelative(5.78f, 5.78f, 0f, isMoreThanHalf = true, isPositiveArc = true, -11.56f, 0f)
+                close()
+                moveTo(13.36f, 12f)
+                arcToRelative(2.21f, 2.21f, 0f, isMoreThanHalf = true, isPositiveArc = false, 4.42f, 0f)
+                arcToRelative(2.21f, 2.21f, 0f, isMoreThanHalf = true, isPositiveArc = false, -4.42f, 0f)
+                close()
+            }
+        }.build()
+    }
 
     /** AutoPlay's lemniscate. */
     val Infinity: ImageVector by lazy {
@@ -486,7 +663,7 @@ object MioriIcons {
         ).apply {
             path(
                 stroke = stroke,
-                strokeLineWidth = STROKE,
+                strokeLineWidth = 1.6f,
                 strokeLineCap = StrokeCap.Round,
                 strokeLineJoin = StrokeJoin.Round,
                 fill = if (filled) stroke else null,
@@ -506,6 +683,25 @@ object MioriIcons {
                 close()
             }
         }.build()
+
+    /** Dismissing or cancelling: an X on the same 14-unit span as [Plus]. */
+    val Close: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_close",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke,
+                strokeLineWidth = STROKE,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(6f, 6f); lineTo(18f, 18f)
+                moveTo(18f, 6f); lineTo(6f, 18f)
+            }
+        }.build()
+    }
 
     /** Adding something — a new playlist, on the library shelf. */
     val Plus: ImageVector by lazy {
@@ -787,6 +983,88 @@ object MioriIcons {
 
                 moveTo(4.5f, 17.5f); lineTo(5.5f, 17.5f)
                 moveTo(9.5f, 17.5f); lineTo(19.5f, 17.5f)
+            }
+        }.build()
+    }
+
+    /**
+     * Apple Music's translate glyph: an outlined back bubble holding an "A" and a
+     * solid front bubble overlapping it, with a "文" punched out by the even-odd rule.
+     */
+    val Translate: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_translate",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            // Back bubble (outlined, open where the front bubble covers it) and the A.
+            path(
+                stroke = stroke,
+                strokeLineWidth = 1.6f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(12.5f, 6.2f)
+                quadTo(12.5f, 3.8f, 10.1f, 3.8f)
+                lineTo(4f, 3.8f)
+                quadTo(1.6f, 3.8f, 1.6f, 6.2f)
+                lineTo(1.6f, 11.9f)
+                quadTo(1.6f, 14.3f, 4f, 14.3f)
+                lineTo(3.8f, 16.4f)
+                quadTo(3.7f, 17.2f, 4.4f, 16.6f)
+                lineTo(6.8f, 14.3f)
+                lineTo(9.4f, 14.3f)
+
+                moveTo(4.75f, 11.75f)
+                lineTo(7.05f, 6.35f)
+                lineTo(9.35f, 11.75f)
+                moveTo(5.6f, 10.2f)
+                lineTo(8.5f, 10.2f)
+            }
+            // Front bubble (solid) with the 文 cut out.
+            path(
+                fill = stroke,
+                pathFillType = PathFillType.EvenOdd,
+            ) {
+                moveTo(13.5f, 7.4f)
+                lineTo(20.4f, 7.4f)
+                quadTo(23f, 7.4f, 23f, 10f)
+                lineTo(23f, 16.1f)
+                quadTo(23f, 18.7f, 20.4f, 18.7f)
+                lineTo(19.9f, 18.7f)
+                lineTo(19.6f, 20.3f)
+                quadTo(19.45f, 21.2f, 18.7f, 20.7f)
+                lineTo(16.4f, 18.7f)
+                lineTo(13.5f, 18.7f)
+                quadTo(10.9f, 18.7f, 10.9f, 16.1f)
+                lineTo(10.9f, 10f)
+                quadTo(10.9f, 7.4f, 13.5f, 7.4f)
+                close()
+
+                // 文
+                moveTo(16.49f, 9.63f)
+                lineTo(16.49f, 10.79f)
+                lineTo(13.63f, 10.79f)
+                lineTo(13.63f, 11.63f)
+                lineTo(14.67f, 11.63f)
+                curveTo(15.07f, 12.7f, 15.57f, 13.6f, 16.23f, 14.35f)
+                curveTo(15.49f, 14.92f, 14.58f, 15.33f, 13.5f, 15.62f)
+                curveTo(13.67f, 15.83f, 13.95f, 16.24f, 14.05f, 16.47f)
+                curveTo(15.16f, 16.12f, 16.1f, 15.65f, 16.89f, 15.01f)
+                curveTo(17.66f, 15.66f, 18.6f, 16.14f, 19.78f, 16.45f)
+                curveTo(19.91f, 16.2f, 20.19f, 15.79f, 20.4f, 15.58f)
+                curveTo(19.29f, 15.33f, 18.37f, 14.9f, 17.62f, 14.33f)
+                curveTo(18.3f, 13.6f, 18.83f, 12.71f, 19.22f, 11.63f)
+                lineTo(20.27f, 11.63f)
+                lineTo(20.27f, 10.79f)
+                lineTo(17.38f, 10.79f)
+                lineTo(17.38f, 9.63f)
+                close()
+                moveTo(16.94f, 13.71f)
+                curveTo(16.38f, 13.12f, 15.95f, 12.42f, 15.65f, 11.63f)
+                lineTo(18.19f, 11.63f)
+                curveTo(17.88f, 12.45f, 17.46f, 13.14f, 16.94f, 13.71f)
+                close()
             }
         }.build()
     }

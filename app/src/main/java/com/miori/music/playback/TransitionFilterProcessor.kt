@@ -6,7 +6,6 @@ import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import com.miori.music.playback.audio.AudioBlock
-import com.miori.music.playback.audio.FloatAudioProcessor
 import com.miori.music.playback.audio.PcmBoundary
 import java.nio.ByteOrder
 import kotlin.math.exp

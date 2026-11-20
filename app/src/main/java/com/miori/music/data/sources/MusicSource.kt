@@ -1,8 +1,6 @@
 package com.miori.music.data.sources
 
 import com.miori.music.data.model.Song
-import java.util.Locale
-
 /**
  * A URL the player can open, and what is expected to come back out of it.
  *

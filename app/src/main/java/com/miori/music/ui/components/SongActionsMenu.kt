@@ -63,6 +63,7 @@ import com.miori.music.data.model.LikeStatus
 import com.miori.music.data.model.ROW_ART_PX
 import com.miori.music.data.model.Song
 import com.miori.music.data.model.artworkAt
+import com.miori.music.data.settings.AppSettings
 import com.miori.music.data.webdav.WebDavUploads
 import com.miori.music.download.DownloadState
 import com.miori.music.download.Downloads
@@ -172,10 +173,12 @@ fun SongActionsMenu(
     /** Opens the timing control offered only by the main player's menu. */
     onLyricsOffset: (() -> Unit)? = null,
     /**
-     * Opens the Automix mix popup on the next transition. Null hides the row —
-     * the player passes one only while Automix is on.
+     * Flips spatial audio for the playing track and saves the choice for it.
+     * Null hides the row; only the player's menu offers it.
      */
-    onAutomixOverview: (() -> Unit)? = null,
+    onToggleSpatialAudio: (() -> Unit)? = null,
+    /** The track's effective spatial-audio state, so the row offers the opposite. */
+    spatialAudioOn: Boolean = false,
     /**
      * True while a lookup for this track's album/artist ids is still in
      * flight, so it isn't yet known whether "Open album" and "Open artist"
@@ -184,9 +187,17 @@ fun SongActionsMenu(
      * as before — present when the id is there, absent when it never was.
      */
     resolvingLinks: Boolean = false,
+    /**
+     * Membuka Song Info di luar menu. Bila diisi, pemanggil menutup menu
+     * lalu menampilkan popup-nya sendiri; bila null, popup tampil di sini.
+     */
+    onShowSongInfo: ((Song) -> Unit)? = null,
+    /** Keeps Add to playlist (and Remove) on the menu without an account, for playlists kept on this device. */
+    canAddToPlaylist: Boolean = false,
 ) {
     var showingSongInfo by remember(song.videoId) { mutableStateOf(false) }
     var pickingSleepTimer by remember { mutableStateOf(false) }
+    var pickingSpeed by remember { mutableStateOf(false) }
     // A menu has no pages to swap, so Song Info opens as a dialog.
     if (showingSongInfo) SongInfoDialog(song) { showingSongInfo = false }
     // Neutral rather than the sleeve's colours: the panel floats over the page
@@ -288,7 +299,7 @@ fun SongActionsMenu(
         // player's own pair: a heart that files the track under this device's
         // Liked playlist, and the device's playlists. [likeStatus] is that
         // playlist's answer there, not YouTube's, and neither needs an account.
-        if (canRate) {
+        if (canRate || canAddToPlaylist) {
             if (startsGroup()) IosMenuSeparator()
             ActionRow(
                 icon = SfIcons.AddToPlaylist,
@@ -372,13 +383,22 @@ fun SongActionsMenu(
             ) { onOpenArtist(id) }
         }
         ActionRow(SfIcons.Info, stringResource(R.string.song_info), accent = palette.accent) {
-            showingSongInfo = true
+            val openInfo = onShowSongInfo
+            if (openInfo != null) openInfo(song) else showingSongInfo = true
         }
 
         // The player's own: about the track playing right now rather than
         // about the song as a thing in a library.
-        if (showSleepTimer || onLyricsOffset != null || onAutomixOverview != null || onCopyLog != null) {
+        if (showSleepTimer || onLyricsOffset != null || onCopyLog != null || onToggleSpatialAudio != null) {
             if (startsGroup()) IosMenuSeparator()
+            if (showSleepTimer) {
+                ActionRow(
+                    icon = SfIcons.Performance,
+                    label = stringResource(R.string.playback_speed_tempo),
+                    value = speedTempoStatus(),
+                    accent = palette.accent,
+                ) { pickingSpeed = true }
+            }
             if (showSleepTimer) {
                 ActionRow(
                     icon = SfIcons.SleepTimer,
@@ -387,12 +407,14 @@ fun SongActionsMenu(
                     accent = palette.accent,
                 ) { pickingSleepTimer = true }
             }
-            // The same popup "Mixing" opens mid-blend, on the transition
-            // still to come.
-            onAutomixOverview?.let {
+            // Stays open after a tap: the label flips in place and the change
+            // is audible at once, so the two settings can be compared by ear.
+            onToggleSpatialAudio?.let {
                 ActionRow(
-                    icon = SfIcons.GraphicEq,
-                    label = stringResource(R.string.automix_overview),
+                    icon = SfIcons.SurroundSound,
+                    label = stringResource(
+                        if (spatialAudioOn) R.string.spatial_audio_prefer_off else R.string.spatial_audio_prefer_on,
+                    ),
                     accent = palette.accent,
                     onClick = it,
                 )
@@ -420,7 +442,13 @@ fun SongActionsMenu(
             // The player's menu has the sleep timer, and swaps its rows for
             // the picker in place.
             if (pickingSleepTimer) {
-                SleepTimerPicker(palette = palette, onBack = { pickingSleepTimer = false })
+                Column(Modifier.fillMaxWidth().jellyPopIn(startAt = 0.4f)) {
+                    SleepTimerPicker(palette = palette, onBack = { pickingSleepTimer = false })
+                }
+            } else if (pickingSpeed) {
+                Column(Modifier.fillMaxWidth().jellyPopIn(startAt = 0.4f)) {
+                    PlaybackSpeedPage(palette = palette, onBack = { pickingSpeed = false })
+                }
             } else {
                 rows()
             }
@@ -683,7 +711,7 @@ private fun SleepTimerHeader(title: String, subtitle: String, onBack: () -> Unit
             .padding(start = 8.dp, end = 22.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onBack) {
+        IconButton(onClick = onBack, modifier = Modifier.glassJelly()) {
             Icon(
                 SfIcons.ArrowBack,
                 contentDescription = stringResource(R.string.back),
@@ -726,7 +754,6 @@ private fun CustomSleepTimerPage(
 ) {
     var minutes by remember { mutableIntStateOf(initialMinutes) }
     val foreground = MaterialTheme.colorScheme.onBackground
-    val readout = iosMenuColors().label
 
     Column(Modifier.fillMaxWidth()) {
         SleepTimerHeader(
@@ -739,7 +766,7 @@ private fun CustomSleepTimerPage(
         Text(
             text = sleepDuration(minutes),
             style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = readout,
+            color = foreground,
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .fillMaxWidth()
@@ -795,8 +822,145 @@ private fun StepButton(
         Text(
             text = label,
             style = MaterialTheme.typography.titleLarge,
-            color = if (enabled) iosMenuColors().label else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f),
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = if (enabled) 0.85f else 0.25f),
         )
+    }
+}
+
+private const val SPEED_PAGE_MIN = 0.5f
+private const val SPEED_PAGE_MAX = 2.0f
+private const val SPEED_PAGE_STEP = 0.05f
+// (2.0 - 0.5) / 0.05 = 30 interval, jadi 29 titik di antara kedua ujung.
+private const val SPEED_PAGE_STOPS = 29
+
+/** "1.25×", atau "1.25× · 0.90×" bila keduanya diubah; null saat normal. */
+@Composable
+private fun speedTempoStatus(): String? {
+    val speed by AppSettings.playbackRate.collectAsStateWithLifecycle()
+    val tempo by AppSettings.playbackTempo.collectAsStateWithLifecycle()
+    if (speed == 1f && tempo == 1f) return null
+    val parts = ArrayList<String>(2)
+    if (speed != 1f) parts.add(speedFactorLabel(speed))
+    if (tempo != 1f) parts.add(speedFactorLabel(tempo))
+    return parts.joinToString(" · ")
+}
+
+private fun speedFactorLabel(value: Float): String =
+    String.format(Locale.getDefault(), "%.2f×", value)
+
+private fun snapSpeedFactor(value: Float): Float =
+    Math.round(value.coerceIn(SPEED_PAGE_MIN, SPEED_PAGE_MAX) / SPEED_PAGE_STEP) * SPEED_PAGE_STEP
+
+/**
+ * Speed dan Tempo, dua slider kaca (IosSlider) di satu halaman menu: Speed
+ * menggeser laju dan pitch bersama, Tempo hanya lajunya. Sama seperti halaman
+ * sleep timer, halaman ini mengganti baris menu di tempat.
+ */
+@Composable
+private fun PlaybackSpeedPage(palette: ArtworkPalette, onBack: () -> Unit) {
+    val speed by AppSettings.playbackRate.collectAsStateWithLifecycle()
+    val tempo by AppSettings.playbackTempo.collectAsStateWithLifecycle()
+    val normal = speed == 1f && tempo == 1f
+
+    Column(Modifier.fillMaxWidth()) {
+        SleepTimerHeader(
+            title = stringResource(R.string.playback_speed_tempo),
+            subtitle = stringResource(R.string.playback_speed_tempo_hint),
+            onBack = onBack,
+        )
+        HorizontalDivider(thickness = 0.5.dp, color = palette.divider)
+
+        SpeedFactorSlider(
+            title = stringResource(R.string.playback_speed),
+            hint = stringResource(R.string.playback_speed_hint),
+            value = speed,
+            onValueChange = AppSettings::setPlaybackRate,
+        )
+        SpeedFactorSlider(
+            title = stringResource(R.string.playback_tempo),
+            hint = stringResource(R.string.playback_tempo_hint),
+            value = tempo,
+            onValueChange = AppSettings::setPlaybackTempo,
+        )
+        Spacer(Modifier.height(16.dp))
+        HorizontalDivider(thickness = 0.5.dp, color = palette.divider)
+        ActionRow(
+            icon = SfIcons.Revert,
+            label = stringResource(R.string.playback_reset),
+            accent = palette.accent,
+            enabled = !normal,
+        ) { AppSettings.resetPlaybackSpeedAndTempo() }
+    }
+}
+
+/** Judul + nilai besar di atas slider kaca, dengan − dan + untuk satu langkah. */
+@Composable
+private fun SpeedFactorSlider(
+    title: String,
+    hint: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+) {
+    val colors = iosMenuColors()
+    val foreground = MaterialTheme.colorScheme.onBackground
+    Column(Modifier.fillMaxWidth().padding(top = 18.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 22.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = 17.sp,
+                        lineHeight = 21.sp,
+                        letterSpacing = (-0.3).sp,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                    color = colors.label,
+                )
+                Text(
+                    text = hint,
+                    fontSize = 13.sp,
+                    lineHeight = 16.sp,
+                    color = colors.secondaryLabel,
+                )
+            }
+            Text(
+                text = speedFactorLabel(value),
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+                color = foreground,
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            StepButton(
+                label = "−",
+                contentDescription = stringResource(R.string.less),
+                enabled = value > SPEED_PAGE_MIN + 0.001f,
+            ) { onValueChange(snapSpeedFactor(value - SPEED_PAGE_STEP)) }
+            IosSlider(
+                value = value,
+                onValueChange = { onValueChange(snapSpeedFactor(it)) },
+                valueRange = SPEED_PAGE_MIN..SPEED_PAGE_MAX,
+                steps = SPEED_PAGE_STOPS,
+                activeColor = foreground.copy(alpha = 0.92f),
+                inactiveColor = foreground.copy(alpha = 0.26f),
+                modifier = Modifier.weight(1f),
+            )
+            StepButton(
+                label = "+",
+                contentDescription = stringResource(R.string.more),
+                enabled = value < SPEED_PAGE_MAX - 0.001f,
+            ) { onValueChange(snapSpeedFactor(value + SPEED_PAGE_STEP)) }
+        }
     }
 }
 
@@ -926,6 +1090,8 @@ internal fun ActionRow(
  */
 @Composable
 private fun LoadingActionRow(icon: ImageVector, label: String, palette: ArtworkPalette) {
+    // One line while the lookup runs; the menu eases taller when the name arrives
+    // (see the animateContentSize on the menu panel).
     IosMenuRow(label = label, icon = icon, onClick = null, enabled = false) {
         CircularProgressIndicator(
             color = palette.onBackgroundVariant,

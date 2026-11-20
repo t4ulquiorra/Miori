@@ -3,12 +3,9 @@ package com.miori.music.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -19,23 +16,24 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.miori.music.sharedui.resources.Res
-import com.miori.music.sharedui.resources.ic_logo
-import com.miori.music.sharedui.resources.top_pick_made_for_you
+import com.miori.music.sharedui.resources.*
 import com.miori.music.ui.player.MeshGradientBackground
 import com.miori.music.ui.player.MeshPalette
-import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.compose.resources.stringResource
 
-/**
- * Made for You mix fluid background artwork.
- * Uses AGSL runtime shader from [LocalMixCoverBackground] on Android, falling back to mesh gradient.
+/*
+ * Kartu "Made for You Mix" di Top Picks: latar blob cairan (warna per mix) dan
+ * teks ala sampul Apple Music: wordmark kecil di kiri atas, nama mix besar dua
+ * baris di bawahnya ("Chill" / "Mix"), dan satu baris artis di kaki kartu.
  */
+
+/** Latar cairan; Android memasok AGSL lewat [LocalMixCoverBackground], lainnya mesh gradient. */
 @Composable
 fun MixFluidArt(title: String, modifier: Modifier = Modifier) {
     val palette = remember(title) { mixContrastPalette(mixPalette(title)) }
@@ -53,7 +51,23 @@ fun MixFluidArt(title: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** Short description per mix type when subtitle is blank. */
+/**
+ * Palet bertingkat gelap-terang untuk kartu Top Picks: dua warna digelapkan dan
+ * satu diputihkan, supaya blob cairan punya bayangan dan sorot, bukan satu warna rata.
+ * Urutan mengikuti shader: dasar mengambil warna ke-2 dan ke-3, blob berputar di kelimanya.
+ */
+fun mixContrastPalette(base: List<Color>): List<Color> {
+    fun at(i: Int) = base[i % base.size]
+    return listOf(
+        lerp(at(3), Color.Black, 0.62f),
+        at(1),
+        lerp(at(2), Color.White, 0.45f),
+        at(0),
+        lerp(at(0), Color.Black, 0.35f),
+    )
+}
+
+/** Deskripsi singkat per jenis mix, dipakai kalau mix tidak punya subtitle (daftar artis). */
 private fun mixDescription(title: String): String {
     val t = title.lowercase()
     return when {
@@ -67,14 +81,9 @@ private fun mixDescription(title: String): String {
     }
 }
 
-/** Text overlay over [MixFluidArt]. */
+/** Teks di atas [MixFluidArt]; bayangan lembut menjaga keterbacaan di atas warna terang. */
 @Composable
-fun MixCoverOverlay(
-    title: String,
-    subtitle: String,
-    modifier: Modifier = Modifier,
-    band: Boolean = true,
-) {
+fun MixCoverOverlay(title: String, subtitle: String, modifier: Modifier = Modifier, band: Boolean = true) {
     val (name, tail) = remember(title) { splitMixTitle(title) }
     val style = MaterialTheme.typography.headlineMedium.copy(
         fontSize = 34.sp,
@@ -84,6 +93,7 @@ fun MixCoverOverlay(
     )
     val madeForYou = stringResource(Res.string.top_pick_made_for_you)
     Box(modifier) {
+        // Band gelap di kaki kartu, seperti kartu Top Picks lain.
         if (band) Box(
             Modifier
                 .align(Alignment.BottomCenter)
@@ -97,15 +107,12 @@ fun MixCoverOverlay(
                     ),
                 ),
         )
-        Icon(
-            painter = painterResource(Res.drawable.ic_logo),
-            contentDescription = null,
-            tint = Color.White,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 12.dp, end = 12.dp)
-                .height(15.dp)
-                .aspectRatio(732f / 440f),
+        Wordmark(
+            logoHeight = 14.dp,
+            fontSize = 16.sp,
+            color = Color.White,
+            gap = 2.dp,
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 12.dp),
         )
         Column(
             Modifier.align(Alignment.Center).padding(horizontal = 18.dp),

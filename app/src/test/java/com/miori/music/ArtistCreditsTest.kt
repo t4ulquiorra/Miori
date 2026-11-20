@@ -3,7 +3,6 @@ package com.miori.music
 import com.miori.music.data.model.ArtistCredit
 import com.miori.music.data.model.ArtistNameIndex
 import com.miori.music.data.model.ArtistRef
-import com.miori.music.data.model.completeArtistCredits
 import com.miori.music.data.model.creditSegments
 import com.miori.music.data.scrobbling.primaryArtist
 import com.miori.music.ui.player.artistCredits

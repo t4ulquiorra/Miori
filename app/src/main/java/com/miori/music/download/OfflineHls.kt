@@ -3,7 +3,6 @@ package com.miori.music.download
 import android.content.Context
 import android.net.Uri
 import com.miori.music.data.Http
-import com.miori.music.data.lyrics.WORD_LYRICS_FIELD
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext

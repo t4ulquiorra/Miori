@@ -619,9 +619,6 @@ object ListenTogether {
         return ProbeResult(isOnline = isOnline, latencyMs = if (isOnline) elapsed.coerceAtLeast(0L) else 0L)
     }
 
-    private suspend fun probeHealth(baseUrl: String): Boolean =
-        probeHealthWithLatency(baseUrl, HEALTH_TIMEOUT_MS).isOnline
-
     data class HealthResolution(
         val resolvedServer: String,
         val health: Health,
@@ -761,9 +758,6 @@ object ListenTogether {
         job.start()
         return job.await()
     }
-
-    /** Whether this device has an account it can jam as. */
-    fun canJoin(): Boolean = identity() != null
 
     fun nickname(): String = prefs.getString(KEY_NICKNAME, null).orEmpty()
 
@@ -1471,7 +1465,10 @@ object ListenTogether {
         val account = store.activeSession ?: return null
         val profile = account.profiles.firstOrNull { it.profileId == account.activeProfileId }
             ?: account.profiles.firstOrNull()
+        val override = AppSettings.profileOverride.value
+            .takeIf { it.owner == AppSettings.profileOwnerOf(account.email) }
         val name = nickname.trim().takeIf { it.isNotBlank() }
+            ?: override?.name?.takeIf { it.isNotBlank() }
             ?: profile?.name?.takeIf { it.isNotBlank() }
             ?: account.name.takeIf { it.isNotBlank() }
             ?: account.email.substringBefore('@').takeIf { it.isNotBlank() }
@@ -1551,7 +1548,19 @@ object ListenTogether {
      * screen shows what will actually be sent rather than a second guess at it
      * — including answering null in the cases a party cannot be joined at all.
      */
-    fun myAvatarUrl(): String? = identity()?.avatar
+    fun myAvatarUrl(): String? {
+        val id = identity() ?: return null
+        // Foto buatan pengguna hanya ada di perangkat ini, jadi hanya dipakai untuk
+        // tampilan lokal. Yang dikirim ke party tetap [Identity.avatar] (URL http).
+        val account = MioriApplication.authStore.activeSession
+        val override = AppSettings.profileOverride.value
+        if (account != null && override.owner == AppSettings.profileOwnerOf(account.email)) {
+            override.photoPath
+                .takeIf { it.isNotEmpty() && java.io.File(it).exists() }
+                ?.let { return "file://$it" }
+        }
+        return id.avatar
+    }
 
     /**
      * This install's identity to the party, independent of who is signed in.
@@ -1719,5 +1728,4 @@ object ListenTogether {
     // below the poll interval, or the debounce silently stretches the poll.
     private const val HEALTH_MIN_GAP_MS = 5_000L
     private const val REPORT_INTERVAL_MS = 10_000L
-    private const val HEALTH_TIMEOUT_MS = 45_000L
 }

@@ -16,10 +16,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
-import com.miori.music.ui.player.MESH_CYCLE_MILLIS
-import com.miori.music.ui.player.MeshGradientBackground
-import com.miori.music.ui.player.WelcomeMeshPalettes
-import com.miori.music.ui.player.cyclingMeshPalette
 import androidx.compose.foundation.clickable
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
@@ -31,13 +27,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import kotlinx.coroutines.delay
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.PlaylistAdd
-import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SwipeToDismissBox
@@ -58,6 +53,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.miori.music.ui.haptics.Haptic
 import com.miori.music.ui.haptics.rememberHaptics
 import kotlin.math.abs
+import kotlin.math.roundToInt
+import kotlin.math.tanh
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import com.miori.music.ui.icons.MioriIcons
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -67,6 +69,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -76,6 +79,9 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -84,15 +90,12 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Velocity
-import androidx.compose.runtime.Stable
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -113,7 +116,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -125,9 +127,6 @@ import com.miori.music.data.model.isMatchMissing
 import androidx.compose.ui.draw.alpha
 import androidx.compose.material3.CircularProgressIndicator
 import com.miori.music.data.model.artworkAt
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.ui.composed
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.foundation.border
 
 /**
@@ -186,21 +185,52 @@ val SHELF_CARD_WIDTH = 150.dp
 /**
  * A track's thumbnail box at [height]: square for a song, 16:9 at the same
  * height for a music video — its picture's own shape, as YouTube Music lists
- * one, rather than a still cropped into a square — unless the listener asked
- * for square, see [VideoThumbnails].
+ * one, rather than a still cropped into a square. Square when the listener
+ * picked square video covers, see [VideoThumbnails].
  */
 fun Modifier.trackArtSize(height: Dp, isVideo: Boolean): Modifier =
     if (isVideo && !VideoThumbnails.square) size(width = height * (16f / 9f), height = height) else size(height)
 
 /**
- * The "Square video thumbnails" setting, as every surface that sizes a music
- * video reads it. Compose state rather than a flow so a plain read anywhere in
- * composition follows it, [trackArtSize] and [VIDEO_CARD_WIDTH][com.miori.music.ui.screens.VIDEO_CARD_WIDTH]
- * included, without each caller collecting it.
+ * The "Square video covers" setting as every surface that sizes a music video
+ * reads it. Compose state, so a plain read in composition follows it without
+ * each caller collecting a flow.
  */
 object VideoThumbnails {
     var square by mutableStateOf(false)
 }
+
+/** Share of the row a lead-shelf card takes, so the next one peeks in past it. */
+private const val HERO_CARD_FRACTION = 0.70f
+
+/**
+ * How wide a lead-shelf card is ever allowed to get.
+ *
+ * The fraction alone is a phone measurement wearing a percent sign: 70% of a
+ * tablet is a card the better part of a foot across, and a hero card is a
+ * caption over some artwork rather than a canvas — blown up that far it stops
+ * being the top of a feed and becomes a poster with a shelf hiding under it.
+ *
+ * Set just clear of what the widest phone asks for (0.70 of 448dp is 314dp), so
+ * every phone keeps the width the fraction gives it and only a screen wider than
+ * any phone is held back to it.
+ */
+private val HERO_CARD_MAX_WIDTH = 320.dp
+
+/** A lead-shelf card's proportions: a touch taller than it is wide. */
+const val HERO_CARD_RATIO = 0.92f
+
+/**
+ * How wide a lead-shelf card should be in a row [available] wide — the shared
+ * answer for the real shelf and for the skeleton that stands in for it, which
+ * have to agree to the pixel or the feed jumps when the data lands.
+ *
+ * Given the row's own width rather than the window's, so it is still right in
+ * the narrower column a tablet leaves once the player has taken its pane.
+ * Height follows from [HERO_CARD_RATIO], so the card keeps its shape at any
+ * width.
+ */
+fun heroCardWidth(available: Dp): Dp = minOf(available * HERO_CARD_FRACTION, HERO_CARD_MAX_WIDTH)
 
 /** Share of the row a page of tracks takes, so the next page peeks in past it. */
 private const val TRACK_COLUMN_FRACTION = 0.88f
@@ -208,7 +238,7 @@ private const val TRACK_COLUMN_FRACTION = 0.88f
 /**
  * How wide a sideways-paging column of track rows is ever allowed to get.
  *
- * A fraction alone is a phone measurement wearing a percent sign, and a track row is
+ * Same trap [HERO_CARD_MAX_WIDTH] answers, and worse for a list: a track row is
  * artwork, a title and a subtitle, none of which have any use for more room. At
  * 88% of a tablet the row's contents stay their own size and the space all lands
  * between the title and the overflow button, so four songs eat the width of the
@@ -355,6 +385,15 @@ fun SongRow(
      * songs folder's per-track download button. Null on every other list.
      */
     trailing: (@Composable () -> Unit)? = null,
+    /**
+     * The album's artist: a row by this same artist leaves its artist line off,
+     * as Apple Music's album listings do. Null keeps the line on every row.
+     */
+    hideArtistOf: String? = null,
+    /** False drops the trailing duration, which Apple Music's album listings omit. */
+    showDuration: Boolean = true,
+    /** Menandai lagu populer album dengan titik kecil di sebelah nomor trek, seperti Apple Music. */
+    popular: Boolean = false,
 ) {
     SwipeToQueueBox(
         onSwipeToQueue = onSwipeToQueue,
@@ -376,6 +415,9 @@ fun SongRow(
             selected = selected,
             showSourceQuality = showSourceQuality,
             trailing = trailing,
+            hideArtistOf = hideArtistOf,
+            showDuration = showDuration,
+            popular = popular,
         )
     }
 }
@@ -390,6 +432,7 @@ fun SongRow(
 fun SwipeToQueueBox(
     onSwipeToQueue: (() -> Unit)?,
     modifier: Modifier = Modifier,
+    destructive: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     if (onSwipeToQueue == null) {
@@ -400,6 +443,11 @@ fun SwipeToQueueBox(
     val haptics = rememberHaptics()
     val swipeStateHolder = remember { mutableStateOf<SwipeToDismissBoxState?>(null) }
     var boxWidth by remember { mutableFloatStateOf(0f) }
+    // Where this row sits (top, height) in the root, read by the rubber pull,
+    // and whether this row is the one that was dragged.
+    val rowBounds = remember { floatArrayOf(0f, 0f) }
+    val dragFlag = remember { booleanArrayOf(false) }
+    var armedState by remember { mutableStateOf(false) }
 
     val currentOnSwipeToQueue by rememberUpdatedState(onSwipeToQueue)
 
@@ -423,30 +471,90 @@ fun SwipeToQueueBox(
     // *commits* past 45% of the width — so without this the label is a promise
     // the finger can't check. One light tick at the crossing is the whole point:
     // let go now and it queues.
-    LaunchedEffect(swipeState, boxWidth) {
-        if (boxWidth <= 0f) return@LaunchedEffect
+    // Only a row being dragged watches its offset; idle rows run no collector.
+    val dragging = swipeState.dismissDirection != SwipeToDismissBoxValue.Settled
+    LaunchedEffect(swipeState, boxWidth, dragging) {
+        // Let go: the rows that were pulled along spring back past rest. Only
+        // the row that was dragged settles them, so an idle row scrolling into
+        // view can't cut a pull short.
+        if (!dragging && dragFlag[0]) {
+            dragFlag[0] = false
+            armedState = false
+            launch { SwipeRubber.near.animateTo(0f, spring(dampingRatio = 0.4f, stiffness = 260f)) }
+            launch { SwipeRubber.far.animateTo(0f, spring(dampingRatio = 0.4f, stiffness = 200f)) }
+            return@LaunchedEffect
+        }
+        if (!dragging || boxWidth <= 0f) return@LaunchedEffect
+        dragFlag[0] = true
+        SwipeRubber.sourceTop = rowBounds[0]
+        SwipeRubber.sourceHeight = rowBounds[1]
+        // A light beat as the row is picked up.
+        haptics.play(Haptic.Tick)
         val armAt = boxWidth * 0.45f
         var armed = false
         snapshotFlow { try { swipeState.requireOffset() } catch (e: Exception) { 0f } }
             .collect { offset ->
+                // Rubber: the rows around the dragged one are drawn along by a
+                // damped share of the pull, the nearest most and the next one
+                // less, and never past two rows away. The pull saturates
+                // instead of growing with the finger.
+                val pull = tanh(offset / (boxWidth * 0.4f))
+                launch {
+                    SwipeRubber.near.animateTo(
+                        pull * boxWidth * 0.085f,
+                        spring(dampingRatio = 0.55f, stiffness = 380f),
+                    )
+                }
+                launch {
+                    SwipeRubber.far.animateTo(
+                        pull * boxWidth * 0.035f,
+                        spring(dampingRatio = 0.55f, stiffness = 220f),
+                    )
+                }
                 val travelled = abs(offset)
                 when {
                     !armed && travelled >= armAt -> {
                         armed = true
+                        armedState = true
                         haptics.play(Haptic.Tick)
                     }
                     // Silent, and with hysteresis: dragging back under the line
                     // re-arms, but so does the spring-back after a successful
                     // queue, and that must not buzz the same gesture twice.
-                    armed && travelled < armAt * 0.8f -> armed = false
+                    armed && travelled < armAt * 0.8f -> {
+                        armed = false
+                        armedState = false
+                    }
                 }
             }
     }
 
     SwipeToDismissBox(
         state = swipeState,
-        modifier = modifier.onSizeChanged { boxWidth = it.width.toFloat() },
-        backgroundContent = { QueueSwipeBackground(swipeState) },
+        modifier = modifier
+            .onSizeChanged { boxWidth = it.width.toFloat() }
+            .onGloballyPositioned {
+                rowBounds[0] = it.positionInRoot().y
+                rowBounds[1] = it.size.height.toFloat()
+            }
+            // Only drawn, never a swipe: the rows beside a dragged one are moved
+            // by this layer alone, so their own swipe state is never touched and
+            // being pulled can never queue them.
+            .graphicsLayer {
+                val near = SwipeRubber.near.value
+                val far = SwipeRubber.far.value
+                val sourceHeight = SwipeRubber.sourceHeight
+                translationX = if (sourceHeight > 0f) {
+                    when (abs(((rowBounds[0] - SwipeRubber.sourceTop) / sourceHeight).roundToInt())) {
+                        1 -> near
+                        2 -> far
+                        else -> 0f
+                    }
+                } else {
+                    0f
+                }
+            },
+        backgroundContent = { QueueSwipeBackground(swipeState, armedState, destructive) },
     ) {
         content()
     }
@@ -454,8 +562,15 @@ fun SwipeToQueueBox(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun QueueSwipeBackground(swipeState: SwipeToDismissBoxState) {
+private fun QueueSwipeBackground(swipeState: SwipeToDismissBoxState, armed: Boolean, destructive: Boolean) {
     val playNext by AppUi.host.swipeToPlayNext.collectAsStateWithLifecycle()
+    val primary = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    // The panel brightens as the swipe arms, so it says "let go now" itself.
+    val glow by animateFloatAsState(
+        targetValue = if (armed) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
+        label = "queueSwipeGlow",
+    )
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -471,32 +586,113 @@ private fun QueueSwipeBackground(swipeState: SwipeToDismissBoxState) {
                     }
                 }
             }
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
+            .background(
+                Brush.horizontalGradient(
+                    listOf(
+                        primary.copy(alpha = 0.16f + 0.14f * glow),
+                        primary.copy(alpha = 0.28f + 0.18f * glow),
+                    ),
+                ),
+            )
             .padding(horizontal = PAGE_GUTTER),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
+        // One label, on the side the row is being pulled from: both at once
+        // showed as a doubled icon as soon as the reveal was wide enough.
+        horizontalArrangement = if (swipeState.dismissDirection == SwipeToDismissBoxValue.EndToStart) {
+            Arrangement.End
+        } else {
+            Arrangement.Start
+        },
     ) {
-        QueueSwipeLabel(playNext)
-        QueueSwipeLabel(playNext)
+        QueueSwipeLabel(playNext, swipeState, armed, destructive)
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun QueueSwipeLabel(playNext: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(
-            if (playNext) Icons.Rounded.PlaylistPlay else Icons.Rounded.PlaylistAdd,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
-        )
-        Spacer(Modifier.width(6.dp))
+private fun QueueSwipeLabel(playNext: Boolean, swipeState: SwipeToDismissBoxState, armed: Boolean, destructive: Boolean) {
+    val primary = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    // The badge pops when the swipe arms and fills solid, like a button
+    // pressed in.
+    val pop by animateFloatAsState(
+        targetValue = if (armed) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.35f, stiffness = 500f),
+        label = "queueSwipePop",
+    )
+    val iconTint by animateColorAsState(
+        targetValue = if (armed) {
+            if (destructive) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary
+        } else {
+            primary
+        },
+        label = "queueSwipeIconTint",
+    )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        // Grows and fades in with the reveal instead of sitting there from the
+        // first pixel.
+        modifier = Modifier.graphicsLayer {
+            val offset = try { swipeState.requireOffset() } catch (e: Exception) { 0f }
+            val reach = (abs(offset) / 160.dp.toPx()).coerceIn(0f, 1f)
+            alpha = reach
+            scaleX = 0.7f + 0.3f * reach
+            scaleY = 0.7f + 0.3f * reach
+        },
+    ) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .padding(5.dp)
+                .graphicsLayer {
+                    val s = 1f + 0.16f * pop
+                    scaleX = s
+                    scaleY = s
+                }
+                .clip(CircleShape)
+                .background(primary.copy(alpha = 0.18f + 0.77f * pop)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = if (destructive) {
+                    Icons.Rounded.Delete
+                } else if (playNext) {
+                    MioriIcons.PlayNext
+                } else {
+                    MioriIcons.PlayLast
+                },
+                contentDescription = null,
+                tint = iconTint,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        Spacer(Modifier.width(10.dp))
         Text(
-            text = stringResource(if (playNext) Res.string.play_next else Res.string.queue),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
+            text = stringResource(
+                if (destructive) {
+                    Res.string.remove_from_queue
+                } else if (playNext) {
+                    Res.string.play_next
+                } else {
+                    Res.string.queue
+                },
+            ),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = primary,
         )
     }
+}
+
+/**
+ * The pull shared by every swipeable row on screen: where the dragged row is,
+ * and how far the row beside it and the one after that are drawn along. The
+ * two are springs, so they trail the finger and overshoot on release.
+ */
+private object SwipeRubber {
+    var sourceTop = 0f
+    var sourceHeight = 0f
+    val near = Animatable(0f)
+    val far = Animatable(0f)
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -517,12 +713,15 @@ private fun SongRowContent(
     selected: Boolean = false,
     showSourceQuality: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
+    hideArtistOf: String? = null,
+    showDuration: Boolean = true,
+    popular: Boolean = false,
 ) {
     val titleColor by animateColorAsState(
         targetValue = if (isCurrent && !searchPlayingStyle) activeTint else MaterialTheme.colorScheme.onBackground,
         label = "song row title",
     )
-    val activeBackground by animateColorAsState(
+    val activeBackground = animateColorAsState(
         targetValue = if ((isCurrent && !searchPlayingStyle) || selected) activeTint.copy(alpha = 0.14f) else Color.Transparent,
         label = "song row background",
     )
@@ -534,7 +733,11 @@ private fun SongRowContent(
         modifier = modifier
             .fillMaxWidth()
             .alpha(if (unavailable) 0.45f else 1f)
-            .background(activeBackground)
+            // Read in draw only, so the fade redraws the row instead of recomposing it.
+            .drawWithContent {
+                drawRect(activeBackground.value)
+                drawContent()
+            }
             .longPressMenuClickable(
                 onClick = onClick,
                 onLongClick = onLongPress,
@@ -552,6 +755,17 @@ private fun SongRowContent(
                 Modifier.width(TRACK_NUMBER_WIDTH).height(52.dp),
                 contentAlignment = Alignment.Center,
             ) {
+                if (popular) {
+                    // Penanda lagu populer: titik kecil di gutter kiri nomor.
+                    Box(
+                        Modifier
+                            .align(Alignment.CenterStart)
+                            .offset(x = -(PAGE_GUTTER / 2) - 2.dp)
+                            .size(4.dp)
+                            .clip(CircleShape)
+                            .background(subtitleColor.copy(alpha = 0.7f)),
+                    )
+                }
                 if (searchPlayingStyle && isCurrent && isPlaying) {
                     SearchPlayingBars()
                 } else if (isCurrent) {
@@ -572,8 +786,9 @@ private fun SongRowContent(
             }
         } else {
             Box(Modifier.trackArtSize(52.dp, song.isVideo)) {
+                val remoteArtwork = com.miori.music.ui.player.rememberRemoteArtworkUrl(song)
                 AsyncImage(
-                    model = com.miori.music.ui.player.rememberRemoteArtworkUrl(song)?.artworkAt(ROW_ART_PX),
+                    model = remember(remoteArtwork) { remoteArtwork?.artworkAt(ROW_ART_PX) },
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -598,12 +813,18 @@ private fun SongRowContent(
                 color = titleColor,
             )
             Spacer(Modifier.height(2.dp))
-            val subtitle = listOfNotNull(
-                song.artist.takeIf { it.isNotBlank() },
-                song.downloadFormat,
-            ).joinToString(" · ")
+            val hideArtist = hideArtistOf != null &&
+                song.artist.trim().equals(hideArtistOf.trim(), ignoreCase = true)
+            val subtitle = remember(song.artist, song.downloadFormat, hideArtist) {
+                listOfNotNull(
+                    song.artist.takeIf { it.isNotBlank() && !hideArtist },
+                    song.downloadFormat,
+                ).joinToString(" · ")
+            }
             val quality = if (showSourceQuality) song.sourceQualityBadge() else null
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Apple Music leaves the line off when it would only repeat the album's artist.
+            val showSubtitleLine = hideArtistOf == null || subtitle.isNotEmpty() || quality != null
+            if (showSubtitleLine) Row(verticalAlignment = Alignment.CenterVertically) {
                 if (quality != null) {
                     SourceQualityBadge(
                         quality = quality,
@@ -649,7 +870,7 @@ private fun SongRowContent(
                 color = subtitleColor,
             )
         } else {
-            song.durationText?.let {
+            song.durationText?.takeIf { showDuration }?.let {
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = it,
@@ -827,29 +1048,39 @@ fun DownloadedBadge(videoId: String, tint: Color, modifier: Modifier = Modifier)
     )
 }
 
-/**
- * Pull-to-refresh for the tab feeds, with the usual circular puck suppressed.
- *
- * The feeds sit under a frosted bar that already occupies the top 96dp, so a
- * puck drawn here would be blurred out by the glass it lands behind. The bar
- * draws its own puck instead, sliding out from under its bottom edge — which
- * is why [state] is hoisted: the bar lives beside this content, not inside it,
- * and has to follow the same drag.
- */
+/** Finger-to-offset distance at which a pull counts as a refresh request. */
 private val ELASTIC_PULL_THRESHOLD = 80.dp
+
+/** Where the page rests while a refresh is running. */
 private val ELASTIC_PULL_HOLD = 56.dp
+
+/** The rubber-band's asymptote: the page can never be pushed this far. */
 private val ELASTIC_PULL_RANGE = 600.dp
+
+/** iOS's UIScrollView rubber-band coefficient. */
 private const val ELASTIC_PULL_RUBBER = 0.6f
+
+/** How long a release waits for the refresh to actually start before assuming it already ended. */
 private const val ELASTIC_PULL_START_GRACE_MS = 600L
+
+/**
+ * The least time the page stays held once a refresh fires. A feed that answers
+ * from cache finishes in a few milliseconds; without this the page would drop
+ * back before the loading animation had been seen.
+ */
 private const val ELASTIC_PULL_MIN_HOLD_MS = 900L
 
+/** Unit vectors of the indicator's 12 spokes, clockwise from twelve o'clock. */
 private val ELASTIC_SPOKE_COS = FloatArray(12) { cos((-90.0 + it * 30.0) * PI / 180.0).toFloat() }
 private val ELASTIC_SPOKE_SIN = FloatArray(12) { sin((-90.0 + it * 30.0) * PI / 180.0).toFloat() }
 
 /**
  * State of the elastic pull-to-refresh: the whole page follows the finger with
- * rubber-band physics, is held at a rest distance while a refresh runs, and
- * springs back smoothly when it ends.
+ * an iOS-style rubber-band, is held at a rest distance while a refresh runs and
+ * springs back when it ends.
+ *
+ * Hoisted by the caller and bound to the caller's scope, so a pull released on
+ * a page that then leaves composition still finishes its spring-back.
  */
 @Stable
 class ElasticRefreshState internal constructor(private val scope: CoroutineScope) {
@@ -868,9 +1099,6 @@ class ElasticRefreshState internal constructor(private val scope: CoroutineScope
     /** True while a finger is pulling the page (as opposed to it settling on its own). */
     var pulling by mutableStateOf(false)
         private set
-
-    val distanceFraction: Float
-        get() = (offset / thresholdPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
 
     internal var thresholdPx = 0f
         private set
@@ -955,6 +1183,7 @@ class ElasticRefreshState internal constructor(private val scope: CoroutineScope
         }
     }
 
+    /** The page is back on screen: drop anything a previous visit left half-done. */
     internal fun onAttach() {
         dragging = false
         pulling = false
@@ -1019,8 +1248,14 @@ private class ElasticRefreshConnection(
 }
 
 /**
- * Pull-to-refresh for the tab feeds: the whole page follows the finger with
- * rubber-band physics, revealing a 12-spoke activity spinner in the opened gap.
+ * Pull-to-refresh for the tab feeds: the whole page follows the finger with an
+ * iOS-style rubber-band instead of a puck drawn over it.
+ *
+ * Past the threshold a release holds the page at a rest distance and calls
+ * [onRefresh] once; when [refreshing] goes back to false the page springs home.
+ * [topInset] is the frosted bar's height, so the small hint in the gap sits
+ * below the bar. [state] is hoisted so a feed that leaves the screen mid-pull
+ * keeps its place.
  */
 @Composable
 fun PullToRefresh(
@@ -1067,6 +1302,11 @@ fun PullToRefresh(
     }
 }
 
+/**
+ * Menelan semua sentuhan di atas halaman selama refresh berjalan, supaya kartu
+ * tidak bisa diketuk dan daftar tidak bisa digeser sementara halaman ditahan.
+ * Dibaca di composable sendiri agar hanya ia yang recompose saat status berganti.
+ */
 @Composable
 private fun RefreshInputBlocker(state: ElasticRefreshState) {
     if (!state.holding) return
@@ -1083,39 +1323,41 @@ private fun RefreshInputBlocker(state: ElasticRefreshState) {
     )
 }
 
+/**
+ * An iOS-style spoke indicator in the gap the pull opens, with a short label
+ * under it. The spokes appear one by one with the drag, then a bright head
+ * steps around them, trailing a fade, while the refresh runs. It lives in the
+ * page, so it
+ * goes where the page goes. Composed only while the page is displaced, so
+ * nothing animates at rest.
+ */
 @Composable
 private fun ElasticRefreshHint(state: ElasticRefreshState, topInset: Dp) {
     val visible by remember(state) { derivedStateOf { state.offset > 0f } }
     if (!visible) return
-
     val color = MaterialTheme.colorScheme.onSurfaceVariant
-    val holding = state.holding
-
-    val angle: Float
-    if (holding) {
-        val spin = rememberInfiniteTransition(label = "elasticRefreshSpin")
-        val a by spin.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(tween(960, easing = LinearEasing)),
-            label = "elasticRefreshAngle",
-        )
-        angle = a
-    } else {
-        angle = 0f
-    }
-
+    val spin = rememberInfiniteTransition(label = "elasticRefreshSpin")
+    val angle by spin.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(960, easing = LinearEasing)),
+        label = "elasticRefreshAngle",
+    )
     val blend by animateFloatAsState(
-        targetValue = if (holding) 1f else 0f,
+        targetValue = if (state.holding) 1f else 0f,
         animationSpec = tween(280),
         label = "elasticRefreshBlend",
     )
-
-    val mode = when {
-        holding -> 2
-        state.armed -> 1
-        else -> 0
+    // 0 = pull, 1 = release, 2 = refreshing. Kept through the spring-back so the
+    // label does not flip back to "pull" while the page is going home.
+    var mode by remember { mutableStateOf(0) }
+    val target = when {
+        state.holding -> 2
+        state.pulling && state.armed -> 1
+        state.pulling -> 0
+        else -> -1
     }
+    LaunchedEffect(target) { if (target >= 0) mode = target }
     val label = stringResource(
         when (mode) {
             2 -> Res.string.pull_refreshing
@@ -1123,31 +1365,28 @@ private fun ElasticRefreshHint(state: ElasticRefreshState, topInset: Dp) {
             else -> Res.string.pull_to_refresh
         },
     )
-
     val density = LocalDensity.current
     val insetPx = with(density) { topInset.toPx() }
     val halfPx = with(density) { 21.dp.toPx() }
     val fadeStartPx = with(density) { 18.dp.toPx() }
     val fadeSpanPx = with(density) { 36.dp.toPx() }
-
     Box(Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .graphicsLayer {
-                    val currentOffset = state.offset
-                    translationY = insetPx + currentOffset / 2f - halfPx
-                    alpha = ((currentOffset - fadeStartPx) / fadeSpanPx).coerceIn(0f, 1f)
+                    translationY = insetPx + state.offset / 2f - halfPx
+                    alpha = ((state.offset - fadeStartPx) / fadeSpanPx).coerceIn(0f, 1f)
                 },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Canvas(Modifier.size(22.dp)) {
-                val currentOffset = state.offset
-                val progress = (currentOffset / state.thresholdPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                val progress = (state.offset / state.thresholdPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
                 val center = Offset(size.width / 2f, size.height / 2f)
                 val inner = 5.5.dp.toPx()
                 val outer = 10.dp.toPx()
                 val strokeWidth = 2.2.dp.toPx()
+                // Like iOS's activity indicator, the head steps from spoke to spoke.
                 val head = (angle / 30f).toInt() % 12
                 for (i in 0 until 12) {
                     val pullAlpha = (progress * 12f - i).coerceIn(0f, 1f) * 0.5f
@@ -1184,6 +1423,7 @@ private fun ElasticRefreshHint(state: ElasticRefreshState, topInset: Dp) {
  * Drawn white-on-colour in either theme, like Replay and the welcome — the
  * mesh is the card, and white type is what sits on colour.
  */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun SignInBanner(
     onSignIn: () -> Unit,
@@ -1206,33 +1446,28 @@ fun SignInBanner(
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(RoundedCornerShape(22.dp))
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f))
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f),
+                shape = RoundedCornerShape(20.dp),
+            )
             .clickable(interactionSource = interaction, indication = null, onClick = onSignIn),
     ) {
-        // A card is a few hundred dp the reader is looking straight at, which
-        // is the case the mesh lets keep moving — see its `continuous` note.
-        MeshGradientBackground(
-            palette = cyclingMeshPalette(WelcomeMeshPalettes, running = motion),
-            modifier = Modifier.matchParentSize(),
-            continuous = true,
-            paused = !motion,
-            driftMillis = 6_000,
-            blurRadius = 36.dp,
-            colorFadeMillis = MESH_CYCLE_MILLIS,
-        )
-        Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 18.dp)) {
+        Column(Modifier.padding(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 16.dp)) {
             Text(
                 text = stringResource(Res.string.sign_in_youtube_music),
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.W800,
-                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.W600,
+                color = MaterialTheme.colorScheme.onBackground,
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
             Row(
                 Modifier
                     .clip(CircleShape)
-                    .background(Color.White)
-                    .padding(start = 16.dp, end = 20.dp, top = 10.dp, bottom = 10.dp),
+                    .background(MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
+                    .padding(start = 12.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Image(
@@ -1244,9 +1479,9 @@ fun SignInBanner(
                 Text(
                     text = stringResource(Res.string.sign_in_with_google),
                     style = MaterialTheme.typography.titleMedium,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.W700,
-                    color = Color.Black,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.W600,
+                    color = MaterialTheme.colorScheme.onBackground,
                 )
             }
         }

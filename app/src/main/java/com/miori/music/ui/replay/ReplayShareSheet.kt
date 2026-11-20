@@ -11,6 +11,13 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -30,7 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.IosShare
+import com.miori.music.ui.icons.SfIcons
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -91,9 +98,12 @@ fun ReplayShareSheet(
     var saved by remember { mutableStateOf(false) }
 
     LaunchedEffect(summary, page) {
-        poster = runCatching { renderReplayPoster(context, summary, holder, memberSince, page) }
-            .onFailure { failed = true }
-            .getOrNull()
+        // Kartu yang sedang tampil di layar dipakai apa adanya; poster Canvas
+        // hanya jadi cadangan (recap / tombol share di halaman Replay).
+        poster = ReplayCapture.take(page)
+            ?: runCatching { renderReplayPoster(context, summary, holder, memberSince, page) }
+                .onFailure { failed = true }
+                .getOrNull()
     }
 
     Column(
@@ -139,7 +149,7 @@ fun ReplayShareSheet(
                     bitmap = image.asImageBitmap(),
                     contentDescription = stringResource(R.string.your_replay),
                     contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.matchParentSize(),
                 )
                 failed -> Text(
                     text = stringResource(R.string.couldnt_draw_picture),
@@ -180,7 +190,7 @@ fun ReplayShareSheet(
             }
             ShareAction(
                 label = stringResource(R.string.share),
-                icon = Icons.Rounded.IosShare,
+                icon = SfIcons.Share,
                 accent = true,
                 enabled = ready,
                 modifier = Modifier.weight(1f),
@@ -215,29 +225,44 @@ internal fun ShareAction(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    val background = when {
-        accent -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.surfaceVariant
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed && enabled) 0.96f else 1f,
+        label = "shareActionPress",
+    )
+    // The player's own look: white discs, solid for the one that sends it.
+    val background = if (accent) {
+        Color.White.copy(alpha = if (enabled) 1f else 0.30f)
+    } else {
+        Color.White.copy(alpha = if (enabled) 0.12f else 0.06f)
     }
-    val foreground = when {
-        accent -> MaterialTheme.colorScheme.onPrimary
-        else -> MaterialTheme.colorScheme.onSurface
+    val foreground = if (accent) {
+        Color(0xFF121212).copy(alpha = if (enabled) 1f else 0.4f)
+    } else {
+        Color.White.copy(alpha = if (enabled) 1f else 0.4f)
     }
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(background.copy(alpha = if (enabled) 1f else 0.4f))
-            .clickable(enabled = enabled, onClick = onClick)
-            // The sides carried nothing but the label's own advance, so the
-            // words sat against the pill's edges; the vertical rhythm is the
-            // one the Replay's buttons use.
-            .padding(horizontal = 18.dp, vertical = 15.dp),
+            .height(52.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(CircleShape)
+            .background(background)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+                onClick = onClick,
+            )
+            .padding(horizontal = 18.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // The icon and the word crossfade rather than swap on a frame, so the
-        // change reads as the button settling into its new state instead of
-        // flickering between two unrelated ones.
+        // change reads as the button settling into its new state.
         Crossfade(targetState = saved, label = "shareAction") { isSaved ->
             Row(
                 horizontalArrangement = Arrangement.Center,
@@ -249,12 +274,12 @@ internal fun ShareAction(
                     tint = foreground,
                     modifier = Modifier.size(19.dp),
                 )
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(
                     text = if (isSaved) (savedLabel ?: label) else label,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.W700,
                     color = foreground,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -332,4 +357,26 @@ internal suspend fun saveToGallery(
 }
 
 private const val MIME = "image/png"
+
+/**
+ * Tangkapan kartu story yang sedang tampil saat tombol share ditekan, supaya
+ * yang dibagikan sama persis dengan yang dilihat pengguna.
+ */
+internal object ReplayCapture {
+    private var page: ReplayStoryPage? = null
+    private var bitmap: Bitmap? = null
+
+    fun put(page: ReplayStoryPage, bitmap: Bitmap) {
+        this.page = page
+        this.bitmap = bitmap
+    }
+
+    fun take(page: ReplayStoryPage?): Bitmap? =
+        if (page != null && page == this.page) bitmap else null
+
+    fun clear() {
+        page = null
+        bitmap = null
+    }
+}
 private const val SHARE_FOLDER = "shared"

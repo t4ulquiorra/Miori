@@ -1,13 +1,11 @@
 package com.miori.music.data.sources.module
 
-import android.util.Log
 import com.miori.music.data.TrackLog
 import com.miori.music.data.Http
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -362,11 +360,6 @@ class ModuleManager {
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
-    fun unloadModule(moduleId: String) {
-        loadedModules.remove(moduleId)
-        QuickJsExecutor.unload(moduleId)
-    }
-
     /**
      * Everything this manager is holding, dropped.
      *
@@ -420,12 +413,5 @@ class ModuleManager {
          * behind the URL were ever successfully read.
          */
         const val STREAM_TTL_MS = 5 * 60 * 1000L
-
-        /**
-         * How many shared answers to keep. A queue's worth of tracks at two
-         * queries and a stream call each, several times over, with room to
-         * spare — the point is a bound, not a budget.
-         */
-        const val MAX_SHARED = 128
     }
 }

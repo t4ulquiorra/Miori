@@ -9,9 +9,7 @@
 
 package com.miori.music.ui.components
 
-import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
-import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -25,17 +23,15 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -45,24 +41,34 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.lerp as lerpDp
+import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
-import com.miori.music.R
 import com.miori.music.data.model.ROW_ART_PX
 import com.miori.music.data.model.Song
 import com.miori.music.data.model.artworkAt
+import com.miori.music.playback.MusicOnlyPlayback
 import com.miori.music.ui.components.floatingtabbar.FloatingTabBar
 import com.miori.music.ui.components.floatingtabbar.FloatingTabBarDefaults
 import com.miori.music.ui.components.floatingtabbar.FloatingTabBarScrollConnection
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.geometry.isUnspecified
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import com.miori.music.ui.components.floatingtabbar.LocalTabPillGeometry
 import com.miori.music.ui.haptics.Haptic
 import com.miori.music.ui.haptics.rememberHaptics
-import com.miori.music.playback.MusicOnlyPlayback
 import com.miori.music.ui.player.PlayerDock
 import com.miori.music.ui.player.AndroidMusicVideo
 import androidx.compose.animation.core.animateDpAsState
@@ -108,6 +114,8 @@ fun GlassNavBar(
     dock: PlayerDock? = null,
     /** Dragging the bar's player up into the full player. */
     pull: MiniPlayerPull? = null,
+    /** true = Search a circle of its own beside the pill; false = the last of the pill's tabs. */
+    searchSeparate: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     // Held for the same reason [tabs] is. The glass factory below closes over
@@ -115,9 +123,18 @@ fun GlassNavBar(
     // lambda, which the tab bar sees as a changed argument and recomposes on.
     val pillShape = remember { RoundedCornerShape(percent = 50) }
     val contentColor = glassContentColor()
-    val selectedColor = contentColor
-    val unselectedColor = contentColor.copy(alpha = 0.65f)
-    val haptics = rememberHaptics()
+// Tema gelap: aksen dicerahkan supaya tetap terbaca di atas glass yang memantulkan
+// cover cerah. Tema terang tidak berubah.
+val isDarkGlass = contentColor == Color.White
+val selectedColor = if (isDarkGlass) {
+    lerp(MaterialTheme.colorScheme.primary, Color.White, 0.06f)
+} else {
+    MaterialTheme.colorScheme.primary
+}
+val unselectedColor = contentColor.copy(alpha = 0.88f)
+val haptics = rememberHaptics()
+    // Goyangan jelly pill now playing, dibagikan ke tab dan Search di sebelahnya.
+    val jellyPush = remember { JellyPush() }
 
     // The tab content lambdas below are captured once per contentKey and held
     // until it changes, so a click handler that reached back to this call's
@@ -129,16 +146,34 @@ fun GlassNavBar(
     // Search is the odd one out in the iOS 26 layout: a circle of its own beside
     // the pill rather than a quarter of it. It is the last tab in Miori's
     // order, which is where the shape wants it anyway.
-    val standaloneIndex = tabs.lastIndex
+    val standaloneIndex = if (searchSeparate) tabs.lastIndex else -1
 
     // A factory, not a value — see the note in FloatingTabBar's header. Each of
     // the three surfaces gets its own glass modifier and so its own shape cache.
     // The theme's own glass tint, as the liquid top bar has it — no white wash.
     val glassSurface: @Composable () -> Modifier = { Modifier.liquidGlass(shape = pillShape) }
 
+    // Seberapa terbuka player (0..1), dibaca saat draw oleh tab bar untuk
+    // mendorong tab ke bawah (expanded) atau ke kiri/kanan (inline).
+    val chromeProgress = remember(dock) { { dock?.openFraction() ?: 0f } }
+    // Tab/Search (inline) dan baris tab (expanded) mengikuti tepi panel yang
+    // sebenarnya, bukan kurva sendiri, supaya tidak menyentuh panel dan tidak
+    // terdorong lebih jauh dari posisi panel.
+    val chromeSidePush = remember(dock) {
+        dock?.let { d -> { toRight: Boolean -> d.panelSideTravel(toRight) } }
+    }
+    val chromeDownPush = remember(dock) {
+        dock?.let { d -> { d.panelBottomTravel() } }
+    }
+
     FloatingTabBar(
         selectedTabKey = selectedIndex,
         scrollConnection = scrollConnection,
+        chromeProgress = chromeProgress,
+        chromeSidePush = chromeSidePush,
+        chromeDownPush = chromeDownPush,
+        jellyPush = jellyPush,
+        inlineSplitLast = !searchSeparate,
         modifier = modifier
             .windowInsetsPadding(floatingBarInsets)
             .padding(horizontal = NAV_BAR_GUTTER)
@@ -150,6 +185,7 @@ fun GlassNavBar(
                 GlassNowPlaying(
                     song = current,
                     isInline = true,
+                    jellyPush = jellyPush,
                     isPlaying = isPlaying,
                     isLoading = isLoading,
                     contentColor = contentColor,
@@ -190,7 +226,10 @@ fun GlassNavBar(
         colors = FloatingTabBarDefaults.colors(
             backgroundColor = Color.Transparent,
             accessoryBackgroundColor = Color.Transparent,
-            indicatorColor = glassIndicatorColor(),
+            // Tema gelap: indikator digelapkan seperti Apple Music, bukan diangkat
+            // putih, supaya ikon dan teks aktif yang cerah menonjol darinya.
+            indicatorColor = if (isDarkGlass) Color.Black.copy(alpha = 0.30f) else glassIndicatorColor(),
+            selectedContentColor = selectedColor,
         ),
         // Flat, because the glass is not. Every surface here already draws its
         // own [Shadow.Default] as part of the backdrop pass, and the library's
@@ -223,13 +262,12 @@ fun GlassNavBar(
         ),
         // Held too: this is declared `Any?`, so a fresh list every pass is a
         // changed argument by identity and defeats skipping on its own.
-        contentKey = remember(selectedIndex, tabs, contentColor) {
-            listOf(selectedIndex, tabs, contentColor)
+        contentKey = remember(selectedIndex, tabs, contentColor, selectedColor, searchSeparate) {
+            listOf(selectedIndex, tabs, contentColor, selectedColor, searchSeparate)
         },
     ) {
         tabs.forEachIndexed { index, tab ->
             val isSelected = index == selectedIndex
-            val tint = if (isSelected) selectedColor else unselectedColor
             val onClick = {
                 if (!isSelected) haptics.play(Haptic.Select)
                 currentOnTabSelected(index)
@@ -238,12 +276,14 @@ fun GlassNavBar(
                 standaloneTab(
                     key = index,
                     icon = {
-                        Icon(
-                            imageVector = tab.icon,
-                            contentDescription = tab.label,
-                            tint = tint,
-                            modifier = Modifier.size(TAB_ICON_SIZE),
-                        )
+                        PillTinted(isSelected, selectedColor, unselectedColor) { tint ->
+                            Icon(
+                                imageVector = tab.icon,
+                                contentDescription = tab.label,
+                                tint = tint,
+                                modifier = Modifier.size(TAB_ICON_SIZE),
+                            )
+                        }
                     },
                     onClick = onClick,
                 )
@@ -251,25 +291,29 @@ fun GlassNavBar(
                 tab(
                     key = index,
                     icon = {
-                        Icon(
-                            imageVector = tab.icon,
-                            contentDescription = tab.label,
-                            tint = tint,
-                            modifier = Modifier.size(TAB_ICON_SIZE),
-                        )
+                        PillTinted(isSelected, selectedColor, unselectedColor) { tint ->
+                            Icon(
+                                imageVector = tab.icon,
+                                contentDescription = tab.label,
+                                tint = tint,
+                                modifier = Modifier.size(TAB_ICON_SIZE),
+                            )
+                        }
                     },
                     title = {
-                        Text(
-                            text = tab.label,
-                            style = tabLabelStyle(),
-                            color = tint,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                        PillTinted(isSelected, selectedColor, unselectedColor) { tint ->
+                            Text(
+                                text = tab.label,
+                                style = tabLabelStyle(),
+                                color = tint,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             // The library's Tab stacks the glyph and the label
                             // with nothing between them; the plain bar spaces
-                            // them, and this is where that gap goes.
-                            modifier = Modifier.padding(top = TAB_ICON_LABEL_GAP),
-                        )
+                                // them, and this is where that gap goes.
+                                modifier = Modifier.padding(top = TAB_ICON_LABEL_GAP),
+                            )
+                        }
                     },
                     onClick = onClick,
                 )
@@ -307,6 +351,9 @@ private fun GlassNowPlaying(
     onBlockedControl: () -> Unit,
     dock: PlayerDock?,
     pull: MiniPlayerPull?,
+    jellyPush: JellyPush? = null,
+    /** When given, the density blend itself (1 = inline, 0 = expanded), read from the value that moves the bar. */
+    inlineProgress: (() -> Float)? = null,
     modifier: Modifier = Modifier,
 ) {
     val haptics = rememberHaptics()
@@ -327,8 +374,20 @@ private fun GlassNowPlaying(
         fontSize = ACCESSORY_ARTIST_SIZE,
         letterSpacing = ACCESSORY_ARTIST_TRACKING,
     )
-    val glyphSlot = if (isInline) 32.dp else 40.dp
-    val glyphSize = if (isInline) 24.dp else EXPANDED_GLYPH_SIZE
+    // The two densities are the ends of one blend, so a row that switches (the mini
+    // player leaving the collapsed bar for the search morph) glides between them
+    // instead of reflowing in one frame. A row that never switches starts and stays
+    // at its target, so nothing animates there.
+    val inlineMixSpring by animateFloatAsState(
+        targetValue = if (isInline) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.9f, stiffness = 700f),
+        label = "accessoryDensity",
+    )
+    // [inlineProgress] is the blend itself when given: no second spring that starts
+    // late or settles apart from the bar it is following.
+    val inlineMix = inlineProgress?.invoke() ?: inlineMixSpring
+    val glyphSlot = lerpDp(40.dp, 32.dp, inlineMix)
+    val glyphSize = lerpDp(EXPANDED_GLYPH_SIZE, 24.dp, inlineMix)
 
     Box(
         // Inline, the accessory is stretched to the row's height by the tab bar
@@ -344,6 +403,7 @@ private fun GlassNowPlaying(
         // in, and a pull started in the strip above or below it went nowhere —
         // on a bar only 48dp tall to begin with.
         modifier = Modifier
+            .playerDockPill(dock)
             // Outside the press scale, which it lifts along with everything else.
             .miniPlayerGestures(
                 pull = pull,
@@ -357,10 +417,15 @@ private fun GlassNowPlaying(
                 },
                 locked = controlsLocked,
                 onBlocked = onBlockedControl,
+                push = jellyPush,
             )
             .graphicsLayer {
-                scaleX = pressScale
-                scaleY = pressScale
+                // Level while the panel is up: the player's cover flies to and
+                // from the artwork laid out inside this, and a press still
+                // easing back would move that target from under it.
+                val factor = if (dock?.panelShown == true) 1f else pressScale
+                scaleX = factor
+                scaleY = factor
             }
             .then(modifier)
             .clickable(
@@ -377,7 +442,7 @@ private fun GlassNowPlaying(
                     // The artwork sits in the end of a capsule, which curves
                     // away from it; at 8dp its corner met the curve.
                     start = 16.dp,
-                    end = if (isInline) 8.dp else 12.dp,
+                    end = lerpDp(12.dp, 8.dp, inlineMix),
                     // Expanded, the 40dp play button and these come to the 48dp
                     // Apple's accessory is.
                     top = 4.dp,
@@ -386,9 +451,8 @@ private fun GlassNowPlaying(
         ) {
             // A music video plays in the cover's place at its own 16:9, as in
             // the floating mini player; the full player takes it over when up.
-            val showsPicture = song.isVideo && MusicOnlyPlayback.showsPicture(song.videoId)
             val artWidth by animateDpAsState(
-                targetValue = if (showsPicture && !VideoThumbnails.square) ACCESSORY_ART_SIZE * (16f / 9f) else ACCESSORY_ART_SIZE,
+                targetValue = if (song.isVideo && !VideoThumbnails.square && MusicOnlyPlayback.showsPicture(song.videoId)) ACCESSORY_ART_SIZE * (16f / 9f) else ACCESSORY_ART_SIZE,
                 label = "glassMiniArtWidth",
             )
             Box(
@@ -406,7 +470,7 @@ private fun GlassNowPlaying(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
-                if (showsPicture) {
+                if (song.isVideo && MusicOnlyPlayback.showsPicture(song.videoId)) {
                     AndroidMusicVideo(
                         videoId = song.videoId,
                         fit = false,
@@ -416,70 +480,133 @@ private fun GlassNowPlaying(
                     )
                 }
             }
-            Spacer(Modifier.width(if (isInline) 8.dp else 9.dp))
+            Spacer(Modifier.width(lerpDp(9.dp, 8.dp, inlineMix)))
             // Title and artist at both densities, as Apple Music has them, in its
             // small, openly spaced type (see [ACCESSORY_TITLE_SIZE]). The inline
             // row shares its width with the tab pill and the Search circle, so
             // a long line fades out at its end, as Apple's does.
-            Column(Modifier.weight(1f)) {
-                val secondary = contentColor.copy(alpha = 0.7f)
-                ExplicitSongTitle(
-                    song = song,
-                    style = titleStyle,
-                    color = contentColor,
-                    badgeColor = secondary,
-                    fadeOverflow = true,
-                )
-                FadingLine(
-                    text = song.artist,
-                    style = artistStyle,
-                    color = secondary,
-                )
+            TrackTextSwitch(song, Modifier.weight(1f)) { shown ->
+                Column {
+                    val secondary = contentColor.copy(alpha = 0.7f)
+                    ExplicitSongTitle(
+                        song = shown,
+                        style = titleStyle,
+                        color = contentColor,
+                        badgeColor = secondary,
+                        fadeOverflow = true,
+                    )
+                    FadingLine(
+                        text = shown.artist,
+                        style = artistStyle,
+                        color = secondary,
+                    )
+                }
             }
             if (isLoading) {
                 Box(Modifier.size(glyphSlot), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(
                         color = contentColor,
                         strokeWidth = 2.dp,
-                        modifier = Modifier.size(if (isInline) 18.dp else 20.dp),
+                        modifier = Modifier.size(lerpDp(20.dp, 18.dp, inlineMix)),
                     )
                 }
             } else {
-                IconButton(
+                MiniPlayerPlayPauseButton(
+                    isPlaying = isPlaying,
+                    tint = contentColor,
+                    slot = glyphSlot,
+                    glyphSize = glyphSize,
                     onClick = {
                         haptics.play(if (isPlaying) Haptic.Pause else Haptic.Resume)
                         onPlayPause()
                     },
-                    modifier = Modifier.size(glyphSlot),
-                ) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = stringResource(if (isPlaying) R.string.pause else R.string.play),
-                        tint = contentColor,
-                        modifier = Modifier.size(glyphSize),
-                    )
-                }
+                )
             }
             // Dropped inline: the collapsed row is sharing its width with the
             // tab pill and the Search circle, and the title is what has to
             // survive that, not a second transport button.
-            if (!isInline) {
-                // Glyph centres 44dp apart, as Apple's are.
-                Spacer(Modifier.width(4.dp))
-                IconButton(
-                    onClick = {
-                        haptics.play(Haptic.SkipNext)
-                        onNext()
-                    },
-                    enabled = !controlsLocked,
-                    modifier = Modifier.size(glyphSlot),
+            // Not composed at all once fully inline. While the density blends, the skip
+            // button is revealed by width and alpha (read at layout/draw only), so it
+            // grows out of the row and the title makes way for it, never popping in.
+            if (inlineMix < 0.999f) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clipToBounds()
+                        .layout { measurable, constraints ->
+                            val placeable = measurable.measure(constraints)
+                            val shown = (1f - inlineMix).coerceIn(0f, 1f)
+                            layout((placeable.width * shown).roundToInt(), placeable.height) {
+                                placeable.placeWithLayer(0, 0) { alpha = shown }
+                            }
+                        },
                 ) {
-                    MiniPlayerNextGlyph(
+                    // Glyph centres 44dp apart, as Apple's are.
+                    Spacer(Modifier.width(4.dp))
+                    MiniPlayerNextButton(
                         tint = contentColor.copy(alpha = if (controlsLocked) 0.3f else 1f),
+                        enabled = !controlsLocked,
+                        slot = glyphSlot,
+                        onClick = {
+                            haptics.play(Haptic.SkipNext)
+                            onNext()
+                        },
                     )
                 }
             }
         }
+    }
+}
+
+/**
+ * The now playing pill as a standalone liquid glass surface, for screens where
+ * [GlassNavBar] is not drawn (the separate Search morph). Same row and same
+ * material as the bar's expanded accessory, so it does not fall back to the
+ * Haze-frosted [MiniPlayer].
+ */
+@Composable
+fun GlassMiniPlayer(
+    song: Song,
+    isPlaying: Boolean,
+    isLoading: Boolean,
+    onPlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+    onExpand: () -> Unit,
+    controlsLocked: Boolean = false,
+    onBlockedControl: () -> Unit = {},
+    dock: PlayerDock? = null,
+    pull: MiniPlayerPull? = null,
+    /** true = draw at the collapsed row's density; flipping it glides to the other density. */
+    inlineDensity: Boolean = false,
+    /** Drives the density blend directly (1 = inline, 0 = expanded); overrides the spring of [inlineDensity]. */
+    inlineProgress: (() -> Float)? = null,
+    modifier: Modifier = Modifier,
+) {
+    val pillShape = remember { RoundedCornerShape(percent = 50) }
+    Box(modifier = modifier.padding(horizontal = NAV_BAR_GUTTER)) {
+        GlassNowPlaying(
+            song = song,
+            isInline = inlineDensity,
+            inlineProgress = inlineProgress,
+            isPlaying = isPlaying,
+            isLoading = isLoading,
+            contentColor = glassContentColor(),
+            onPlayPause = onPlayPause,
+            onNext = onNext,
+            onPrevious = onPrevious,
+            onExpand = onExpand,
+            controlsLocked = controlsLocked,
+            onBlockedControl = onBlockedControl,
+            dock = dock,
+            pull = pull,
+            // 48dp seperti tinggi baris tab: di nav bar, accessory inline diregangkan ke tinggi itu,
+            // sedangkan di sini tidak ada yang meregangkannya (inline 40dp, expanded 48dp).
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .then(Modifier.liquidGlass(shape = pillShape)),
+        )
     }
 }
 
@@ -518,3 +645,45 @@ private val ACCESSORY_ART_CORNER = 5.7.dp
 
 /** The expanded play glyph: its triangle about Apple's 15pt tall. */
 private val EXPANDED_GLYPH_SIZE = 29.dp
+
+/**
+ * A tab's content drawn in the unselected colour, with the selected colour masked
+ * in over exactly the part the glass pill covers: the pixels under the pill's edge
+ * switch colour at once as it slides, with no blend. Without a pill (inline bar)
+ * it is just the selected/unselected colour.
+ */
+@Composable
+private fun PillTinted(
+    isSelected: Boolean,
+    selected: Color,
+    unselected: Color,
+    content: @Composable (Color) -> Unit,
+) {
+    val geometry = LocalTabPillGeometry.current
+    val hasPill by remember(geometry) { derivedStateOf { !geometry().isUnspecified } }
+    if (!hasPill) {
+        content(if (isSelected) selected else unselected)
+        return
+    }
+    Box {
+        content(unselected)
+        Box(
+            Modifier
+                .matchParentSize()
+                .clearAndSetSemantics {}
+                .drawWithContent {
+                    val g = geometry()
+                    if (g.isUnspecified) return@drawWithContent
+                    val centre = size.width / 2f + g.x
+                    val left = centre - g.y / 2f
+                    val right = centre + g.y / 2f
+                    if (right <= 0f || left >= size.width) return@drawWithContent
+                    clipRect(left = left, top = -size.height, right = right, bottom = size.height * 2f) {
+                        this@drawWithContent.drawContent()
+                    }
+                },
+        ) {
+            content(selected)
+        }
+    }
+}

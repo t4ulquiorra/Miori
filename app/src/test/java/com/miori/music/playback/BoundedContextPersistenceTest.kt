@@ -6,7 +6,6 @@ import com.miori.music.data.model.PlaybackSourceType
 import com.miori.music.data.model.QueueTier
 import com.miori.music.data.model.Song
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue

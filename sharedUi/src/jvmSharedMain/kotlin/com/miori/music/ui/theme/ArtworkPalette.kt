@@ -67,6 +67,12 @@ data class ArtworkPalette(
     val onBackground: Color,
     val onBackgroundVariant: Color,
     val divider: Color,
+    /**
+     * False while the artwork's colours are still being read. A surface that
+     * paints the artwork itself holds it back until this is true, so the
+     * picture and the page colour arrive on the same frame.
+     */
+    val ready: Boolean = true,
 )
 
 /**
@@ -139,6 +145,7 @@ fun rememberArtworkPalette(
             target.onBackgroundVariant, spec, label = "tintOnVariant",
         ).value,
         divider = animateColorAsState(target.divider, spec, label = "tintDivider").value,
+        ready = keyColors != null || decoded != null || imageUrl == null,
     )
 }
 
@@ -151,6 +158,59 @@ fun rememberArtworkTopBandLuminance(
     imageUrl: String?,
     artPx: Int = CARD_ART_PX,
 ): Float? = rememberArtworkSeed(imageUrl, artPx)?.topBandLuminance
+
+/**
+ * The pale tint the player sets its secondary text and glyphs in, or null
+ * until the artwork has been read — and for artwork with no colour worth
+ * echoing — so the player keeps its plain white rather than showing a
+ * placeholder grey that reads as the colour having gone wrong.
+ *
+ * Not [ArtworkPalette.onBackgroundVariant], though it is lifted the same way:
+ * that one always starts from the sleeve's most common colour, and on a cover
+ * that is mostly black that colour is a near-black whose hue nobody can see.
+ * HSL still gives it one — a black with a trace of red in it is "pink" at full
+ * saturation — and lifting it pale put a pink on the player that is nowhere
+ * on the cover. So the tint starts from the first colour that is actually
+ * visible: the dominant one if it has real chroma, else the accent.
+ */
+@Composable
+fun rememberPlayerTint(imageUrl: String?, artPx: Int = CARD_ART_PX): Color? {
+    val seed = rememberArtworkSeed(imageUrl, artPx)
+    return remember(seed) { seed?.playerTint() }
+}
+
+/**
+ * Solid dark colour of the artwork at [imageUrl] for the player's panel, or
+ * null until it has been read. Unlike [rememberArtworkPalette] it never
+ * crossfades through the theme's colours on the way, so a panel painted with
+ * it is the sleeve's colour from its first frame or the caller's own neutral.
+ */
+@Composable
+fun rememberArtworkPanelColor(imageUrl: String?, artPx: Int = CARD_ART_PX): Color? {
+    val seed = rememberArtworkSeed(imageUrl, artPx)
+    return remember(seed) { seed?.toPalette(dark = true)?.background }
+}
+
+private fun Seed.playerTint(): Color? {
+    val source = listOf(dominant, vibrant).firstOrNull { it.chroma() >= TINT_MIN_CHROMA } ?: return null
+    // Much nearer white than an album page's secondary line: the player's
+    // backdrop is the artwork itself, often as bright and as coloured as the
+    // tint, and a tint at the page's 0.80 sank into it. This keeps a hint of
+    // the sleeve while staying a light text colour on any backdrop.
+    return source.withHsl(
+        saturation = { adaptedArtworkSaturation(it, minimum = 0.18f, maximum = PLAYER_TINT_MAX_SATURATION) },
+        lightness = { PLAYER_TINT_LIGHTNESS },
+    )
+}
+
+private const val PLAYER_TINT_LIGHTNESS = 0.88f
+private const val PLAYER_TINT_MAX_SATURATION = 0.40f
+
+/** Spread between the strongest and weakest channel — colour you can see, unlike HSL saturation. */
+private fun Color.chroma(): Float = maxOf(red, green, blue) - minOf(red, green, blue)
+
+/** Below this a swatch is black, white or grey to the eye, whatever hue HSL assigns it. */
+private const val TINT_MIN_CHROMA = 0.08f
 
 @Composable
 private fun rememberArtworkSeed(imageUrl: String?, artPx: Int): Seed? {
@@ -202,6 +262,7 @@ private data class Seed(
     val vibrant: Color,
     val edge: Color,
     val topBandLuminance: Float,
+    val rim: ArtworkRim? = null,
 )
 
 private fun seedOf(bitmap: ImageBitmap): Seed? {
@@ -232,6 +293,7 @@ private fun seedOf(bitmap: ImageBitmap): Seed? {
         vibrant = Color(vibrant.rgb),
         edge = bitmap.bottomEdgeColor(),
         topBandLuminance = bitmap.topBandRelativeLuminance(),
+        rim = bitmap.rimColors(),
     )
 }
 
@@ -279,6 +341,85 @@ private fun ImageBitmap.bottomEdgeColor(): Color {
 
 /** How much of the artwork's height the edge colour is read from. */
 private const val EDGE_BAND = 0.18f
+
+/**
+ * Warna rim tipis di tepi cover player, dibaca dari sudut cover itu sendiri:
+ * kiri atas, kanan bawah, dan tengah (rata-rata kanan atas dan kiri bawah).
+ */
+@Immutable
+data class ArtworkRim(
+    val topLeft: Color,
+    val middle: Color,
+    val bottomRight: Color,
+)
+
+/** Null sampai cover terbaca. Pemanggil jatuh ke tint tunggal ([rememberPlayerTint]). */
+@Composable
+fun rememberPlayerRim(imageUrl: String?, artPx: Int = CARD_ART_PX): ArtworkRim? {
+    val seed = rememberArtworkSeed(imageUrl, artPx)
+    return remember(seed) { seed?.rim }
+}
+
+private fun ImageBitmap.rimColors(): ArtworkRim {
+    val side = (minOf(width, height) * RIM_SAMPLE).toInt().coerceAtLeast(1)
+    val topLeft = meanColor(0, 0, side, side)
+    val topRight = meanColor(width - side, 0, side, side)
+    val bottomLeft = meanColor(0, height - side, side, side)
+    val bottomRight = meanColor(width - side, height - side, side, side)
+    val middle = Color(
+        (topRight.red + bottomLeft.red) / 2f,
+        (topRight.green + bottomLeft.green) / 2f,
+        (topRight.blue + bottomLeft.blue) / 2f,
+    )
+    return ArtworkRim(
+        topLeft = topLeft.liftedForRim(),
+        middle = middle.liftedForRim(),
+        bottomRight = bottomRight.liftedForRim(),
+    )
+}
+
+/** Rata-rata warna satu area kecil bitmap. */
+private fun ImageBitmap.meanColor(x: Int, y: Int, w: Int, h: Int): Color {
+    val pixels = IntArray(w * h)
+    readPixels(pixels, startX = x, startY = y, width = w, height = h)
+    var red = 0L
+    var green = 0L
+    var blue = 0L
+    pixels.forEach { pixel ->
+        red += (pixel shr 16) and 0xFF
+        green += (pixel shr 8) and 0xFF
+        blue += pixel and 0xFF
+    }
+    val count = pixels.size.coerceAtLeast(1)
+    return Color(
+        red = (red / count).toInt(),
+        green = (green / count).toInt(),
+        blue = (blue / count).toInt(),
+    )
+}
+
+/**
+ * Mengangkat warna sudut jadi cahaya tipis yang terbaca di atas cover gelap.
+ * Sudut yang nyaris hitam atau abu tidak diberi hue karangan: saturasinya
+ * diperkecil sesuai chroma yang benar-benar terlihat.
+ */
+private fun Color.liftedForRim(): Color {
+    val visible = (chroma() / RIM_CHROMA_FULL).coerceIn(0f, 1f)
+    return withHsl(
+        saturation = { (it * visible).coerceAtMost(RIM_MAX_SATURATION) },
+        lightness = { it.coerceIn(RIM_MIN_LIGHTNESS, RIM_MAX_LIGHTNESS) },
+    )
+}
+
+/** Sisi area sudut yang dirata-rata, sebagai pecahan sisi terpendek cover. */
+private const val RIM_SAMPLE = 0.28f
+
+/** Chroma yang dianggap warna penuh; di bawahnya saturasi rim diperkecil. */
+private const val RIM_CHROMA_FULL = 0.12f
+
+private const val RIM_MAX_SATURATION = 0.7f
+private const val RIM_MIN_LIGHTNESS = 0.72f
+private const val RIM_MAX_LIGHTNESS = 0.9f
 
 /**
  * The status inset occupies only the upper sliver of the full-bleed hero on a

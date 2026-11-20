@@ -1,7 +1,6 @@
 package com.miori.music.ui.components
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
@@ -37,6 +36,9 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -48,13 +50,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -62,8 +63,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.max
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import com.miori.music.R
 import com.miori.music.data.model.Account
@@ -162,6 +167,13 @@ fun FrostedTopBar(
     /** Source sampled by floating top-bar surfaces when liquid glass is off. */
     backButtonHazeState: HazeState? = null,
     trailingTitle: String? = null,
+    /**
+     * Judul melayang (pil kaca) tepat di kanan tombol back. Hanya tampil pada
+     * halaman dengan tombol back; panjang teks otomatis dipendekkan.
+     */
+    floatingTitle: String? = null,
+    // Lambda agar perubahan alpha per frame scroll tidak merekomposisi pemanggil.
+    floatingTitleAlpha: () -> Float = { 1f },
     onBack: (() -> Unit)? = null,
     refreshing: Boolean = false,
     // A lambda, not a value: the drag changes every frame, and reading it in
@@ -173,11 +185,29 @@ fun FrostedTopBar(
      * Root tabs have no back button there for it to collide with.
      */
     accessory: (@Composable () -> Unit)? = null,
+    /** True while the account popup is up: the actions pill, glass circle included, steps aside for the card. */
+    actionsHidden: Boolean = false,
+    /** Search results are up: the profile pill folds away (scale + fade) so the page's filter control can take the top. */
+    actionsCollapsed: Boolean = false,
     actions: @Composable () -> Unit = {},
 ) {
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val useFloatingChrome = artworkPageChrome ||
         (LocalLiquidGlassEnabled.current && isGlassSupported())
+    // Hilang seketika saat kartu membuka di atasnya; kembali dengan fade pendek saat kartu pergi.
+    val actionsAlpha by animateFloatAsState(
+        targetValue = if (actionsHidden) 0f else 1f,
+        animationSpec = tween(durationMillis = if (actionsHidden) 70 else 180),
+        label = "topBarActionsAlpha",
+    )
+    val actionsCollapse by animateFloatAsState(
+        targetValue = if (actionsCollapsed) 1f else 0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "topBarActionsCollapse",
+    )
     val titleAlpha by animateFloatAsState(
         targetValue = if (scrolled() || trailingTitle != null) 1f else 0f,
         animationSpec = tween(220),
@@ -296,7 +326,10 @@ fun FrostedTopBar(
                 } else {
                     IconButton(
                         onClick = onBack,
-                        modifier = Modifier.align(Alignment.CenterStart).padding(start = 4.dp),
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(start = 4.dp)
+                            .glassJelly(),
                     ) {
                         Icon(
                             SfIcons.ArrowBack,
@@ -305,6 +338,21 @@ fun FrostedTopBar(
                         )
                     }
                 }
+            }
+            // Judul halaman melayang di kanan tombol back dan memudar halus
+            // mengikuti scroll halaman.
+            if (onBack != null && useFloatingChrome && floatingTitle != null) {
+                ArtworkPageTitle(
+                    text = shortBarTitle(floatingTitle),
+                    hazeState = backButtonHazeState,
+                    alphaProvider = floatingTitleAlpha,
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(
+                            start = BAR_GUTTER + TOP_CONTROL_SIZE + ACCESSORY_GAP,
+                            end = BAR_GUTTER + 100.dp,
+                        ),
+                )
             }
             // No wordmark at the leading end: the root tabs carry it above
             // their large heading instead (LargePageTitle in :sharedUi).
@@ -323,12 +371,32 @@ fun FrostedTopBar(
             ) {
                 if (accessory != null) {
                     Box(Modifier.weight(1f)) {
-                        AccessoryPill(content = accessory)
+                        AccessoryPill(
+                            floating = useFloatingChrome,
+                            hazeState = backButtonHazeState,
+                            content = accessory,
+                        )
                     }
                     Spacer(Modifier.width(ACCESSORY_GAP))
                 }
                 if (useFloatingChrome) {
-                    ArtworkPageActions(hazeState = backButtonHazeState, content = actions)
+                    // Removed once fully folded: a hidden pill that stayed composed
+                    // would still swallow the taps meant for the control under it.
+                    if (!actionsCollapsed || actionsCollapse < 0.99f) {
+                        ArtworkPageActions(
+                            hazeState = backButtonHazeState,
+                            modifier = Modifier.graphicsLayer {
+                                val fold = actionsCollapse
+                                alpha = actionsAlpha * (1f - fold)
+                                val s = 1f - 0.35f * fold
+                                scaleX = s
+                                scaleY = s
+                                translationY = -10.dp.toPx() * fold
+                                transformOrigin = TransformOrigin(1f, 0f)
+                            },
+                            content = actions,
+                        )
+                    }
                 } else {
                     actions()
                 }
@@ -358,6 +426,7 @@ private fun ArtworkPageBackButton(
     IconButton(
         onClick = onClick,
         modifier = modifier
+            .glassJelly()
             .size(TOP_CONTROL_SIZE)
             .then(artworkPageSurface(shape = shape, hazeState = hazeState)),
     ) {
@@ -369,6 +438,43 @@ private fun ArtworkPageBackButton(
     }
 }
 
+/** Memendekkan judul panjang di batas kata, mis. "Account & integrations" -> "Account…". */
+private fun shortBarTitle(title: String, max: Int = 16): String {
+    val t = title.trim()
+    if (t.length <= max) return t
+    val head = t.take(max - 1)
+    val byWord = head.substringBeforeLast(' ', head).trimEnd(' ', ',', '&', '-')
+    return (if (byWord.length >= 6) byWord else head.trimEnd()) + "…"
+}
+
+/** Pil kaca berisi judul halaman, material sama dengan tombol back. */
+@Composable
+private fun ArtworkPageTitle(
+    text: String,
+    hazeState: HazeState?,
+    alphaProvider: () -> Float,
+    modifier: Modifier = Modifier,
+) {
+    // Teks saja (tanpa pill/permukaan kaca), seperti judul navbar Apple Music.
+    Box(
+        modifier = modifier
+            .graphicsLayer { alpha = alphaProvider() }
+            .height(40.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleMedium,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+    }
+}
+
 /** One shared pill for every action at the right of a floating top bar. */
 @Composable
 private fun ArtworkPageActions(
@@ -376,27 +482,40 @@ private fun ArtworkPageActions(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
+    // 0 while the pill holds only the profile photo, up to 1 once another action
+    // has opened room beside it. Written by the pill's layout, read at draw time.
+    val extraActions = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
+    val readExtraActions = remember { { extraActions.floatValue } }
     ActionsRow(
         modifier = modifier
+            .glassJelly(GLASS_JELLY_PRESS_WIDE)
             .then(artworkPageSurface(shape = CircleShape, hazeState = hazeState))
             // Keep the right edge fixed while a new action opens room to its
             // left. The surface itself therefore grows instead of jumping to
             // its new width in a single frame.
+            // End-aligned: the profile photo is the last item and stays glued to
+            // the right edge while the glass grows or shrinks to its left. With
+            // the default start alignment the photo slid inside the pill on every
+            // tab change, even though its place on screen never changed.
             .animateContentSize(
                 animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    dampingRatio = 0.9f,
                     stiffness = Spring.StiffnessMediumLow,
                 ),
+                alignment = Alignment.CenterEnd,
             )
             // One profile target with no inset is a true circle, the back
             // button's size. Once another action exists, Apple's inset opens at
             // both ends. This is layout padding inside the surface, not an
             // outer margin, so BAR_GUTTER remains unchanged.
-            .artworkActionEdgePadding(),
+            .artworkActionEdgePadding { extraActions.floatValue = it },
     ) {
         // Apple's pill is as tall as its back button, 44pt, where the actions'
         // own 48dp touch targets stood it 4dp taller than the circle beside it.
-        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides TOP_CONTROL_SIZE) {
+        CompositionLocalProvider(
+            LocalMinimumInteractiveComponentSize provides TOP_CONTROL_SIZE,
+            LocalActionsExtraFraction provides readExtraActions,
+        ) {
             content()
         }
     }
@@ -434,26 +553,54 @@ private fun ActionsRow(modifier: Modifier, content: @Composable () -> Unit) {
 
 /**
  * The bar's accessory — the Search tab's field — as a squircle pill at the
- * height of the controls beside it, in the field's own solid fill.
- *
- * Deliberately the same with Liquid Glass on as off: the field is somewhere
- * to type, and on glass its hint and text took the glass's content colour
- * over whatever page was scrolling under it. The controls beside it still
- * follow the glass setting.
+ * height of the controls beside it. On floating chrome it is cut from the same
+ * surface as those controls, its glyphs and words in the glass's content
+ * colour; on the plain bar it keeps the field's own fill. Same shape and size
+ * either way, so turning Liquid Glass off changes the material and nothing else.
  */
 @Composable
-private fun AccessoryPill(content: @Composable () -> Unit) {
+private fun AccessoryPill(
+    floating: Boolean,
+    hazeState: HazeState?,
+    content: @Composable () -> Unit,
+) {
+    val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
+    val glass = floating && LocalLiquidGlassEnabled.current && isGlassSupported() && !reduceDynamicBlur
     val shape = remember { SquirclePillShape() }
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(TOP_CONTROL_SIZE)
-            .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceVariant),
+            .then(
+                if (floating) {
+                    artworkPageSurface(shape = shape, hazeState = hazeState, refract = false)
+                } else {
+                    Modifier
+                        .clip(shape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                },
+            ),
     ) {
-        CompositionLocalProvider(LocalSearchFieldOnSurface provides true, content = content)
+        CompositionLocalProvider(LocalSearchFieldOnSurface provides true) {
+            if (glass) {
+                val glassContent = glassContentColor()
+                MaterialTheme(
+                    colorScheme = MaterialTheme.colorScheme.copy(
+                        onBackground = glassContent,
+                        onSurfaceVariant = glassContent.copy(alpha = ACCESSORY_HINT_ALPHA),
+                        primary = glassContent,
+                    ),
+                    content = content,
+                )
+            } else {
+                content()
+            }
+        }
     }
 }
+
+/** The field's hint and glyphs on glass, against its typed text at full strength. */
+private const val ACCESSORY_HINT_ALPHA = 0.6f
 
 /**
  * Edge padding that collapses only for the profile-only state.
@@ -463,11 +610,14 @@ private fun AccessoryPill(content: @Composable () -> Unit) {
  * reliable source of truth. At exactly one icon target the pill stays circular;
  * above that it gains Apple's inset while retaining fully round ends.
  */
-private fun Modifier.artworkActionEdgePadding(): Modifier = layout { measurable, constraints ->
+private fun Modifier.artworkActionEdgePadding(
+    onFraction: (Float) -> Unit = {},
+): Modifier = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints.copy(minWidth = 0))
     val oneActionWidth = TOP_CONTROL_SIZE.roundToPx()
     val extraActionFraction = ((placeable.width - oneActionWidth).toFloat() / oneActionWidth)
         .coerceIn(0f, 1f)
+    onFraction(extraActionFraction)
     val edgePadding = (ACTION_EDGE_INSET.roundToPx() * extraActionFraction).roundToInt()
     val width = (placeable.width + edgePadding * 2).coerceIn(constraints.minWidth, constraints.maxWidth)
 
@@ -482,6 +632,8 @@ private fun Modifier.artworkActionEdgePadding(): Modifier = layout { measurable,
 private fun artworkPageSurface(
     shape: CornerBasedShape,
     hazeState: HazeState?,
+    /** False for a control over page content, where bending what is behind it helps no one. */
+    refract: Boolean = true,
 ): Modifier {
     val container = MaterialTheme.colorScheme.surface
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
@@ -491,7 +643,7 @@ private fun artworkPageSurface(
         .clip(shape)
         .then(
             when {
-                useLiquidGlass -> Modifier.liquidGlass(shape)
+                useLiquidGlass -> Modifier.liquidGlass(shape, refract = refract)
                 reduceDynamicBlur || hazeState == null -> Modifier.background(container)
                 else -> Modifier.optimizedHazeEffect(
                     state = hazeState,
@@ -521,16 +673,42 @@ fun TopBarAccountButton(
     account: Account?,
     onClick: () -> Unit,
     onSwipeProfile: ((forward: Boolean) -> Boolean)? = null,
+    /** True while the account popup is up: the button steps aside for the card that grows out of it. */
+    hidden: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val translation = remember { Animatable(0f) }
+    // Gone at once as the card opens over it; back with a short fade as the card leaves.
+    val visibility = animateFloatAsState(
+        targetValue = if (hidden) 0f else 1f,
+        animationSpec = tween(durationMillis = if (hidden) 70 else 180),
+        label = "accountButtonVisibility",
+    )
+    val rawExtraActions = LocalActionsExtraFraction.current
+    // Pecahan mentah melompat dalam satu frame saat aksi lain (share, unduhan)
+    // muncul, padahal pil kaca tumbuh dengan pegas. Dihaluskan dengan pegas yang
+    // sama supaya foto profil mengecil mengikuti pil, bukan loncat.
+    val extraSmooth = remember { Animatable(rawExtraActions().coerceIn(0f, 1f)) }
+    LaunchedEffect(rawExtraActions) {
+        snapshotFlow { rawExtraActions().coerceIn(0f, 1f) }.collectLatest { target ->
+            extraSmooth.animateTo(
+                target,
+                spring(dampingRatio = 0.9f, stiffness = Spring.StiffnessMediumLow),
+            )
+        }
+    }
+    val extraActions = remember { { extraSmooth.value } }
     val scope = rememberCoroutineScope()
     // Wrapped in an IconButton so it keeps the touch target, the ripple and the
     // spacing every other action in this bar has.
-    IconButton(
-        onClick = onClick,
+    // A plain clickable box rather than an IconButton: the IconButton clips its
+    // content to a 40dp circle, which would cut the photo short of the glass edge.
+    Box(
         modifier = modifier
-            .graphicsLayer { translationY = translation.value }
+            .graphicsLayer {
+                translationY = translation.value
+                alpha = visibility.value
+            }
             .pointerInput(onSwipeProfile) {
                 if (onSwipeProfile == null) return@pointerInput
                 var drag = 0f
@@ -544,7 +722,11 @@ fun TopBarAccountButton(
                         }
                     },
                 )
-            },
+            }
+            .minimumInteractiveComponentSize()
+            .clip(CircleShape)
+            .clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
         val photo = account?.thumbnailUrl
         if (photo != null) {
@@ -553,14 +735,16 @@ fun TopBarAccountButton(
                 contentDescription = stringResource(R.string.switch_account),
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .size(AVATAR_SIZE)
+                    .size(TOP_CONTROL_SIZE)
+                    .avatarFill(extraActions)
                     .clip(CircleShape)
                     .thumbnailBorder(CircleShape),
             )
         } else {
             Box(
                 modifier = Modifier
-                    .size(AVATAR_SIZE)
+                    .size(TOP_CONTROL_SIZE)
+                    .avatarFill(extraActions)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.surfaceVariant)
                     .thumbnailBorder(CircleShape),
@@ -570,12 +754,15 @@ fun TopBarAccountButton(
                     Icons.Rounded.Person,
                     contentDescription = stringResource(R.string.switch_account),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(28.dp),
                 )
             }
         }
     }
 }
+
+// Refresh feedback lives in the page itself (see PullToRefresh): the page
+// follows the finger, so the bar draws no puck of its own.
 
 /**
  * The floating top controls' height — the back circle and the actions pill
@@ -598,3 +785,25 @@ private val ACTION_EDGE_INSET = 1.5.dp
  * glyph does, and at 24 it sat heavier in the bar than the wordmark opposite it.
  */
 private val AVATAR_SIZE = 28.dp
+
+/**
+ * 0 when the actions pill holds only the profile photo, 1 once it holds more.
+ * Read at draw time; the default (1) leaves the photo at [AVATAR_SIZE] on bars
+ * that do not provide it.
+ */
+private val LocalActionsExtraFraction =
+    androidx.compose.runtime.compositionLocalOf<() -> Float> { { 1f } }
+
+/**
+ * Grows the photo to the full height of the glass circle while it is the pill's
+ * only action, and eases it back to [AVATAR_SIZE] as another action opens room
+ * beside it. A draw-time scale, so the layout never shifts.
+ */
+private fun Modifier.avatarFill(extraActions: () -> Float): Modifier = graphicsLayer {
+    // The photo is laid out at the full circle size and only shrunk when other
+    // actions share the pill, so alone it is never an upscaled 28dp image.
+    val small = AVATAR_SIZE.value / TOP_CONTROL_SIZE.value
+    val scale = small + (1f - small) * (1f - extraActions().coerceIn(0f, 1f))
+    scaleX = scale
+    scaleY = scale
+}

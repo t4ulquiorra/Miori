@@ -1,18 +1,38 @@
 package com.miori.music.ui.screens
 
+import com.miori.music.data.model.HOME_SLOT_MOODS
+import com.miori.music.data.model.HOME_SLOT_TOP_PICKS
+import com.miori.music.data.model.HomeLayout
+import com.miori.music.data.model.homeShelfKey
+import com.miori.music.ui.components.VideoThumbnails
 import com.miori.music.ui.components.trackArtSize
 import com.miori.music.ui.components.contextClick
-import com.miori.music.ui.AppUi
 import com.miori.music.sharedui.resources.*
 import org.jetbrains.compose.resources.painterResource
-import com.miori.music.ui.festive.GoldenLogo
 import org.jetbrains.compose.resources.DrawableResource
-import androidx.compose.foundation.Image
 import org.jetbrains.compose.resources.stringResource
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import com.miori.music.ui.rememberIsForeground
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Offset
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
+import androidx.compose.ui.graphics.graphicsLayer
 import com.miori.music.ui.components.longPressMenuClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,15 +51,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import com.miori.music.ui.components.ShelfRow
+import com.miori.music.ui.components.shelfStagger
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.material3.Text
 import com.miori.music.ui.components.ElasticRefreshState
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -50,6 +73,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -58,14 +82,17 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cached
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.LibraryMusic
-import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Storage
 import com.miori.music.ui.icons.MioriIcons
+import com.miori.music.data.YtMusicRepository
 import coil3.compose.AsyncImage
 import com.miori.music.data.model.CARD_ART_PX
+import com.miori.music.data.model.HEADER_ART_PX
 import com.miori.music.data.model.HomeShelf
+import com.miori.music.data.model.LOCAL_SPEED_DIAL_TITLE
 import com.miori.music.data.model.ROW_ART_PX
 import com.miori.music.data.model.ShelfItem
 import com.miori.music.data.model.ShelfLayout
@@ -75,27 +102,129 @@ import com.miori.music.data.model.TopPickMood
 import com.miori.music.data.model.UiState
 import java.util.Locale
 import com.miori.music.data.model.artworkAt
+import com.miori.music.ui.components.HERO_CARD_RATIO
 import com.miori.music.ui.components.MessageState
 import com.miori.music.ui.components.PAGE_GUTTER
 import com.miori.music.ui.components.RowMoreButton
 import com.miori.music.ui.components.PullToRefresh
 import com.miori.music.ui.components.SHELF_CARD_WIDTH
-import com.miori.music.ui.components.VideoThumbnails
 import com.miori.music.ui.components.SearchPlayingBars
 import com.miori.music.ui.components.SignInBanner
+import com.miori.music.ui.components.coverFlightSource
+import com.miori.music.ui.components.hideDuringCoverFlight
+import com.miori.music.ui.components.rememberCoverFlightTap
 import com.miori.music.ui.components.feedMoreSkeleton
 import com.miori.music.ui.components.feedSkeleton
 import com.miori.music.ui.components.recentlyPlayedSkeleton
+import com.miori.music.ui.components.ShelfSkeleton
+import com.miori.music.ui.components.heroCardWidth
 import com.miori.music.ui.components.thumbnailBorder
 import com.miori.music.ui.components.trackColumnWidth
 import com.miori.music.ui.player.MeshGradientBackground
 import com.miori.music.ui.player.MeshPalette
 
 /** How far the Listen now heading and feed sit above the shared top inset. */
-private val HOME_TITLE_LIFT = 28.dp
+internal val HOME_TITLE_LIFT = 28.dp
 
 private const val RECENTS_TITLE = "Recents"
 private const val RECENT_TRACKS_PER_COLUMN = 4
+
+private val LISTEN_AGAIN_TITLES = listOf("Listen again", "Nghe lại", "もう一度聴く", "Dengarkan lagi", "Putar ulang", "다시 듣기")
+private val SPEED_DIAL_TITLES = listOf(LOCAL_SPEED_DIAL_TITLE, "Speed dial", "Panggilan cepat", "Quay số nhanh", "スピードダイヤル", "스피드 다이얼")
+private val QUICK_PICKS_TITLES = listOf("Quick picks", "Lựa chọn nhanh", "Chọn nhanh đài phát", "クイック ミックス", "Pilihan cepat", "Pilihan singkat", "빠른 선곡", "빠른 선택")
+
+/**
+ * Quick picks menempati slot Listen again (baris kartu persegi di depan),
+ * dan Listen again pindah ke slot Quick picks (daftar berhalaman).
+ * Dibiarkan apa adanya bila salah satunya tidak ada.
+ */
+private fun List<HomeShelf>.withQuickPicksInListenAgainSlot(): List<HomeShelf> {
+    val quick = indexOfFirst { shelf -> QUICK_PICKS_TITLES.any { shelf.title.trim().equals(it, ignoreCase = true) } }
+    val again = indexOfFirst { shelf -> LISTEN_AGAIN_TITLES.any { shelf.title.trim().equals(it, ignoreCase = true) } }
+    if (quick < 0 || again < 0 || quick == again) return this
+    return toMutableList().also {
+        it[quick] = this[again]
+        it[again] = this[quick]
+    }
+}
+
+/**
+ * Recents and YouTube's Listen again trade places: Listen again leads the
+ * feed and Recents sits where it was. Left as is when either is missing, as
+ * for a guest, who has no Recents.
+ */
+private fun List<HomeShelf>.withListenAgainFirst(): List<HomeShelf> {
+    val recents = indexOfFirst { it.title.trim().equals(RECENTS_TITLE, ignoreCase = true) }
+    val again = indexOfFirst { shelf -> LISTEN_AGAIN_TITLES.any { shelf.title.trim().equals(it, ignoreCase = true) } }
+    if (recents < 0 || again < 0 || recents == again) return this
+    return toMutableList().also {
+        it[recents] = this[again]
+        it[again] = this[recents]
+    }
+}
+
+/**
+ * Listen again adalah satu baris kartu persegi, jadi shelf tepat di bawahnya
+ * tidak boleh berbentuk sama: shelf berbentuk lain terdekat (daftar berhalaman
+ * seperti Recents/Quick picks dulu, lalu video) naik mengisi slot itu.
+ * Dibiarkan apa adanya bila semua shelf di bawahnya berbentuk kartu.
+ */
+private fun List<HomeShelf>.withOtherModelBelowListenAgain(): List<HomeShelf> {
+    val again = indexOfFirst { shelf -> QUICK_PICKS_TITLES.any { shelf.title.trim().equals(it, ignoreCase = true) } }
+    if (again < 0 || again + 1 >= size) return this
+    fun HomeShelf.isPagedList() =
+        layout == ShelfLayout.LIST || title.trim().equals(RECENTS_TITLE, ignoreCase = true)
+    fun HomeShelf.isCardRow() = layout == ShelfLayout.CARDS && !isPagedList()
+    if (!this[again + 1].isCardRow()) return this
+    val from = (again + 2 until size).firstOrNull { this[it].isPagedList() }
+        ?: (again + 2 until size).firstOrNull { !this[it].isCardRow() }
+        ?: return this
+    return toMutableList().also { it.add(again + 1, it.removeAt(from)) }
+}
+
+/** How many placeholder rows a custom layout shows while the feed loads. */
+private const val HOME_SKELETON_SLOTS = 4
+
+
+
+/**
+ * Loading placeholders in the order the listener arranged Home: Top Picks,
+ * Recents and every shelf each get a skeleton in their own slot. Hidden rows
+ * are not passed in; Top Picks, Find Your Mood and Recents only get one when
+ * they are actually going to be drawn.
+ */
+private fun androidx.compose.foundation.lazy.LazyListScope.homeLayoutSkeleton(
+    slots: List<String>,
+    withTopPicks: Boolean,
+    withMoods: Boolean,
+    withRecents: Boolean,
+) {
+    val recentsKey = homeShelfKey(RECENTS_TITLE)
+    var shown = 0
+    for (key in slots) {
+        if (shown >= HOME_SKELETON_SLOTS) break
+        val position = shown
+        when {
+            key == HOME_SLOT_TOP_PICKS -> if (withTopPicks) {
+                topPicksSkeleton()
+                shown++
+            }
+            key == recentsKey -> if (withRecents) {
+                recentlyPlayedSkeleton()
+                shown++
+            }
+            key == HOME_SLOT_MOODS -> if (withMoods) {
+                item(key = "skeleton:slot:$key") { ShelfSkeleton(index = position) }
+                shown++
+            }
+            else -> {
+                item(key = "skeleton:slot:$key") { ShelfSkeleton(index = position) }
+                shown++
+            }
+        }
+    }
+    if (shown == 0) feedSkeleton(firstIsHero = false)
+}
 
 private fun List<ShelfItem>.playingItemMatcher(song: Song?): (ShelfItem) -> Boolean {
     song ?: return { false }
@@ -122,10 +251,6 @@ fun HomeScreen(
     contentPadding: PaddingValues,
     /** The page's heading, or null for none — the desktop's pages carry no heading. */
     title: String?,
-    /** Casts the wordmark above the heading in glowing gold, for a festival. */
-    festiveLogo: Boolean = false,
-    /** Tapping the festive wordmark, e.g. to bring its greeting back. */
-    onFestiveLogoClick: (() -> Unit)? = null,
     signedIn: Boolean = true,
     onSignIn: (() -> Unit)? = null,
     /**
@@ -139,6 +264,12 @@ fun HomeScreen(
     onLoadMore: (() -> Unit)? = null,
     loadingMore: Boolean = false,
     recentlyPlayedLoading: Boolean = false,
+    /**
+     * Whether the feed's first shelf gets the big full-bleed cards. The phone
+     * leads with them; on a window as wide as a desktop's they are posters, so
+     * there every shelf is the ordinary row.
+     */
+    leadHero: Boolean = false,
     currentSong: Song? = null,
     isPlaying: Boolean = false,
     /**
@@ -158,9 +289,30 @@ fun HomeScreen(
     onMoodsShowAll: () -> Unit = {},
     /** Whether the Top Picks and mood artwork may animate — see [LocalArtworkMotion]. */
     artworkMotion: Boolean = true,
+    /** Memutar daftar lagu dari awal; dipakai tombol play di kartu playlist. */
+    onPlaySongs: ((List<Song>) -> Unit)? = null,
+    /** The listener's own order and hidden rows. Empty keeps Home's built-in order. */
+    homeLayout: HomeLayout = HomeLayout(),
+    /** Swaps the logo and wordmark for a plain [title], without the mark. */
+    hideBranding: Boolean = false,
+    /** The listener's pinned playlists, as one row above the feed. Null or empty draws nothing. */
+    pinnedShelf: HomeShelf? = null,
 ) {
     // Top Picks' pictures and motion wait for the feed — see LocalArtworkImages.
     val feedReady = state !is UiState.Loading
+    // A custom layout places Top Picks itself, among the other rows, once the feed
+    // is in. Until then it only goes above the feed when the layout puts it first;
+    // anywhere else it waits for its slot rather than jump there later.
+    // A custom layout draws Top Picks (and its skeleton) in its own slot; only an
+    // error page keeps it above the message when the layout puts it first.
+    val topPicksAboveFeed = if (homeLayout.isCustom) {
+        state is UiState.Error &&
+            homeLayout.slots.firstOrNull { !it.hidden }?.key == HOME_SLOT_TOP_PICKS
+    } else {
+        true
+    }
+    // Held from the first frame, so the row's slot never opens up after the feed is drawn.
+    val topPicksWaiting = topPicks == null && (topPicksLoading || state is UiState.Loading)
     CompositionLocalProvider(
         LocalArtworkMotion provides (artworkMotion && feedReady),
         LocalArtworkImages provides feedReady,
@@ -173,8 +325,8 @@ fun HomeScreen(
         refreshing = refreshing,
         onRefresh = onRefresh,
         state = pullState,
-        modifier = modifier,
         topInset = contentPadding.calculateTopPadding(),
+        modifier = modifier,
     ) {
         LazyColumn(
             state = listState,
@@ -191,7 +343,7 @@ fun HomeScreen(
             },
         ) {
             if (title != null) {
-                item { HomeTitle(title, festiveLogo = festiveLogo, onFestiveLogoClick = onFestiveLogoClick) }
+                item { HomeTitle(title, hideBranding) }
             }
             if (!signedIn && onSignIn != null) {
                 item {
@@ -204,7 +356,19 @@ fun HomeScreen(
                     )
                 }
             }
-            if (onTopPickClick != null) {
+            // Pinned playlists: one tap from Home instead of a trip to Library.
+            if (pinnedShelf != null && pinnedShelf.items.isNotEmpty()) {
+                item(key = "pinned-playlists") {
+                    Shelf(
+                        shelf = pinnedShelf,
+                        onItemClick = { onItemClick(it, pinnedShelf.title) },
+                        onItemLongPress = onItemLongPress,
+                        currentSong = currentSong,
+                        isPlaying = isPlaying,
+                    )
+                }
+            }
+            if (onTopPickClick != null && topPicksAboveFeed) {
                 when {
                     !topPicks.isNullOrEmpty() -> item(key = "top-picks") {
                         TopPicksShelf(
@@ -214,31 +378,67 @@ fun HomeScreen(
                             onLongPress = onTopPickLongPress,
                         )
                     }
-                    topPicks == null && topPicksLoading -> topPicksSkeleton()
+                    topPicksWaiting -> topPicksSkeleton()
                 }
             }
             when (state) {
                 is UiState.Loading -> {
-                    if (recentlyPlayedLoading) {
+                    if (homeLayout.isCustom) {
+                        // Placeholders in the listener's own order, so what loads
+                        // lands where its skeleton already stood.
+                        homeLayoutSkeleton(
+                            slots = homeLayout.slots.filterNot { it.hidden }.map { it.key },
+                            withTopPicks = onTopPickClick != null,
+                            withMoods = onMoodClick != null,
+                            withRecents = recentlyPlayedLoading,
+                        )
+                    } else if (recentlyPlayedLoading) {
                         recentlyPlayedSkeleton()
+                        // Recents owns the leading layout while its request is
+                        // pending, so the feed behind it starts with ordinary
+                        // shelf placeholders rather than another hero card.
+                        feedSkeleton(firstIsHero = false)
+                    } else {
+                        feedSkeleton(firstIsHero = leadHero)
                     }
-                    feedSkeleton()
                 }
                 is UiState.Error -> item {
                     MessageState(state.message, actionLabel = stringResource(Res.string.retry), onAction = onRetry)
                 }
                 is UiState.Success -> {
-                    if (recentlyPlayedLoading) {
-                        recentlyPlayedSkeleton()
-                    }
+                    // The Apple-style release row now leads Explore; keep it out of Home.
+                    val editorialIndex = if (onTopPickClick != null) editorialShelfIndex(state.data) else null
+                    // Recents' skeleton is drawn inside the list, in the slot Recents
+                    // will take, rather than stacked above rows that then swap places.
                     itemsIndexedShelves(
-                        shelves = state.data,
+                        shelves = if (editorialIndex != null) {
+                            state.data.filterIndexed { index, _ -> index != editorialIndex }
+                        } else {
+                            state.data
+                        },
                         onMoodClick = onMoodClick,
                         onMoodsShowAll = onMoodsShowAll,
                         onItemClick = onItemClick,
                         onItemLongPress = onItemLongPress,
                         currentSong = currentSong,
                         isPlaying = isPlaying,
+                        firstIsHero = leadHero,
+                        recentsPending = recentlyPlayedLoading,
+                        onPlaySongs = onPlaySongs,
+                        homeLayout = homeLayout,
+                        topPicksPending = onTopPickClick != null && topPicksWaiting,
+                        topPicksItem = if (onTopPickClick != null && !topPicks.isNullOrEmpty()) {
+                            {
+                                TopPicksShelf(
+                                    picks = topPicks,
+                                    listenerName = listenerName,
+                                    onClick = onTopPickClick,
+                                    onLongPress = onTopPickLongPress,
+                                )
+                            }
+                        } else {
+                            null
+                        },
                     )
                     if (loadingMore) feedMoreSkeleton()
                 }
@@ -269,33 +469,101 @@ fun HomeScreen(
     }
 }
 
-/** Recents mirrors the artist page's top-tracks pager; other shelves use square cards. */
+/**
+ * The shelves Home draws from a loaded feed, in the order it draws them when the
+ * listener has not arranged anything. [dropEditorial] is true wherever Top Picks
+ * is on, since the release row then leads Explore instead.
+ */
+fun homeFeedShelves(shelves: List<HomeShelf>, dropEditorial: Boolean = true): List<HomeShelf> {
+    val editorial = if (dropEditorial) editorialShelfIndex(shelves) else null
+    val kept = if (editorial != null) shelves.filterIndexed { index, _ -> index != editorial } else shelves
+    return kept.withListenAgainFirst().withQuickPicksInListenAgainSlot().withOtherModelBelowListenAgain()
+}
+
+/**
+ * Every slot Home has right now, as layout keys, in the order Home draws them
+ * without a saved layout: Top Picks first, Find Your Mood after Recents.
+ */
+fun homeDefaultSlotKeys(
+    shelves: List<HomeShelf>,
+    withTopPicks: Boolean,
+    withMoods: Boolean,
+    dropEditorial: Boolean = withTopPicks,
+): List<String> {
+    val ordered = homeFeedShelves(shelves, dropEditorial = dropEditorial)
+    val moodAt = (ordered.indexOfFirst { it.title.trim().equals(RECENTS_TITLE, ignoreCase = true) }
+        .takeIf { it >= 0 } ?: 1) + 1
+    return buildList {
+        if (withTopPicks) add(HOME_SLOT_TOP_PICKS)
+        ordered.forEachIndexed { index, shelf ->
+            if (withMoods && index == moodAt) add(HOME_SLOT_MOODS)
+            add(homeShelfKey(shelf.title))
+        }
+        if (withMoods && moodAt >= ordered.size) add(HOME_SLOT_MOODS)
+    }.distinct()
+}
+
+/** A shelf's title the way Home shows it, for the layout dialog. */
+@Composable
+fun homeShelfLabel(title: String): String = localizeShelfTitle(title.trim().replace('\n', ' '))
+
+/**
+ * Recents mirrors the artist page's top-tracks pager. Any other lead shelf keeps
+ * Apple's full-bleed treatment, while the remaining shelves use square cards.
+ */
 private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedShelves(
     shelves: List<HomeShelf>,
     onItemClick: (ShelfItem, String) -> Unit,
     onItemLongPress: ((ShelfItem) -> Unit)?,
     currentSong: Song?,
     isPlaying: Boolean,
+    firstIsHero: Boolean = false,
     onMoodClick: ((TopPickMood, String) -> Unit)? = null,
     onMoodsShowAll: () -> Unit = {},
+    onPlaySongs: ((List<Song>) -> Unit)? = null,
+    homeLayout: HomeLayout = HomeLayout(),
+    /** The Top Picks row, when there is one to draw. Only placed by a custom [homeLayout]. */
+    topPicksItem: (@Composable () -> Unit)? = null,
+    /** The row is still being built: a custom [homeLayout] holds its slot with a skeleton. */
+    topPicksPending: Boolean = false,
+    /** Recents is still loading: a skeleton holds the slot it will land in. */
+    recentsPending: Boolean = false,
 ) {
-    shelves.forEachIndexed { index, shelf ->
-        // Find Your Mood follows the lead shelf, as on Apple Music's Home.
-        if (index == 1 && onMoodClick != null) {
-            item(key = "find-your-mood") { FindYourMoodShelf(onMoodClick, onMoodsShowAll) }
+    // Recents swaps places with Listen again once it arrives, so its slot is
+    // reserved from the start and the rows beneath are already where they will stay.
+    val withRecentsSlot = if (
+        recentsPending && shelves.none { it.title.trim().equals(RECENTS_TITLE, ignoreCase = true) }
+    ) {
+        listOf(HomeShelf(title = RECENTS_TITLE, items = emptyList())) + shelves
+    } else {
+        shelves
+    }
+    val ordered = withRecentsSlot.withListenAgainFirst().withQuickPicksInListenAgainSlot().withOtherModelBelowListenAgain()
+    // Find Your Mood sits right after Recents, so it never follows another
+    // row of cards directly. Without Recents (a guest) it goes after the second shelf.
+    val moodAt = (ordered.indexOfFirst { it.title.trim().equals(RECENTS_TITLE, ignoreCase = true) }
+        .takeIf { it >= 0 } ?: 1) + 1
+    fun shelfItem(index: Int, shelf: HomeShelf) {
+        if (recentsPending && shelf.items.isEmpty() && shelf.title == RECENTS_TITLE) {
+            recentlyPlayedSkeleton()
+            return
         }
-        item(key = shelf.title + index) {
+        item(key = shelf.title + index, contentType = shelf.layout) {
             val openItem: (ShelfItem) -> Unit = { item -> onItemClick(item, shelf.title) }
-            // Listen again and Quick picks are lists on the web player, as
-            // Recents is here: one pager for all three.
+            val isListenAgain = LISTEN_AGAIN_TITLES.any { shelf.title.trim().equals(it, ignoreCase = true) }
+            val isQuickPicks = QUICK_PICKS_TITLES.any { shelf.title.trim().equals(it, ignoreCase = true) }
             if (shelf.isMixShelf()) {
                 MixCoverShelf(
                     shelf = shelf,
                     onItemClick = openItem,
                     onItemLongPress = onItemLongPress,
                 )
-            } else if (shelf.layout == ShelfLayout.LIST ||
-                (index == 0 && shelf.title.equals(RECENTS_TITLE, ignoreCase = true))
+            } else if (isListenAgain || (
+                    !isQuickPicks && (
+                        shelf.layout == ShelfLayout.LIST ||
+                            shelf.title.equals(RECENTS_TITLE, ignoreCase = true)
+                        )
+                    )
             ) {
                 RecentShelf(
                     shelf = shelf,
@@ -306,7 +574,14 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedShelves(
                 )
             } else {
                 Shelf(
-                    shelf = shelf,
+                    shelf = if (isQuickPicks || isListenAgain) {
+                        shelf.copy(
+                            title = localizeShelfTitle(shelf.title),
+                            subtitle = localizeShelfSubtitle(shelf.subtitle),
+                        )
+                    } else {
+                        shelf
+                    },
                     onItemClick = openItem,
                     onItemLongPress = onItemLongPress,
                     currentSong = currentSong,
@@ -315,11 +590,46 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexedShelves(
             }
         }
     }
+
+    if (homeLayout.isCustom) {
+        // The listener's own order: Top Picks, Find Your Mood and every shelf are
+        // slots on one list. What the layout has not seen yet goes last.
+        val entries = buildList<Pair<String, HomeShelf?>> {
+            if (topPicksItem != null || topPicksPending) add(HOME_SLOT_TOP_PICKS to null)
+            if (onMoodClick != null) add(HOME_SLOT_MOODS to null)
+            ordered.forEach { add(homeShelfKey(it.title) to it) }
+        }
+        var shelfIndex = 0
+        homeLayout.arrange(entries) { it.first }.forEach { (key, shelf) ->
+            when {
+                shelf != null -> shelfItem(shelfIndex++, shelf)
+                key == HOME_SLOT_TOP_PICKS -> if (topPicksItem != null) {
+                    item(key = "top-picks") { topPicksItem() }
+                } else {
+                    topPicksSkeleton()
+                }
+                else -> item(key = "find-your-mood") {
+                    if (onMoodClick != null) FindYourMoodShelf(onMoodClick, onMoodsShowAll)
+                }
+            }
+        }
+        return
+    }
+
+    ordered.forEachIndexed { index, shelf ->
+        if (index == moodAt && onMoodClick != null) {
+            item(key = "find-your-mood") { FindYourMoodShelf(onMoodClick, onMoodsShowAll) }
+        }
+        shelfItem(index, shelf)
+    }
+    if (moodAt >= ordered.size && onMoodClick != null) {
+        item(key = "find-your-mood") { FindYourMoodShelf(onMoodClick, onMoodsShowAll) }
+    }
 }
 
 /** The same four-rows-per-page treatment used by an artist's Top songs. */
 @Composable
-private fun RecentShelf(
+internal fun RecentShelf(
     shelf: HomeShelf,
     onItemClick: (ShelfItem) -> Unit,
     onItemLongPress: ((ShelfItem) -> Unit)?,
@@ -331,13 +641,14 @@ private fun RecentShelf(
         val isCurrentItem = shelf.items.playingItemMatcher(currentSong)
         BoxWithConstraints {
             val columnWidth = trackColumnWidth(maxWidth)
+            val recentColumns = remember(shelf.items) { shelf.items.chunked(RECENT_TRACKS_PER_COLUMN) }
             ShelfRow(
                 contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(shelf.items.chunked(RECENT_TRACKS_PER_COLUMN)) { column ->
+                items(recentColumns, contentType = { "recent-column" }) { column ->
                     Column(Modifier.width(columnWidth)) {
-                        column.forEach { item ->
+                        column.forEachIndexed { index, item ->
                             RecentTrackRow(
                                 item = item,
                                 onClick = { onItemClick(item) },
@@ -345,6 +656,13 @@ private fun RecentShelf(
                                 isCurrent = isCurrentItem(item),
                                 isPlaying = isCurrentItem(item) && isPlaying,
                             )
+                            if (index < column.lastIndex) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(start = 60.dp),
+                                    thickness = 0.5.dp,
+                                    color = MaterialTheme.colorScheme.outline,
+                                )
+                            }
                         }
                     }
                 }
@@ -362,7 +680,7 @@ private fun RecentSectionHeader(title: String, subtitle: String) {
     ) {
         Text(
             text = title,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onBackground,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -469,33 +787,31 @@ fun CompactTrackRow(
  * system font scale.
  */
 @Composable
-private fun HomeTitle(
-    title: String,
-    modifier: Modifier = Modifier,
-    festiveLogo: Boolean = false,
-    onFestiveLogoClick: (() -> Unit)? = null,
-) {
+private fun HomeTitle(title: String, hideBranding: Boolean, modifier: Modifier = Modifier) {
     val style = MaterialTheme.typography.displayLarge
     val logoHeight = with(LocalDensity.current) { (style.fontSize * LOGO_TO_FONT).toDp() }
     Column(modifier = modifier.padding(horizontal = PAGE_GUTTER, vertical = 8.dp)) {
-        val logoModifier = Modifier
-            .padding(bottom = 14.dp)
-            .height(logoHeight)
-            .aspectRatio(LOGO_ASPECT)
-        if (festiveLogo) {
-            GoldenLogo(
-                painter = painterResource(Res.drawable.ic_logo),
-                modifier = logoModifier,
-                onClick = onFestiveLogoClick,
+        if (hideBranding) {
+            Text(
+                text = title,
+                style = style,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                modifier = Modifier.padding(bottom = 8.dp),
             )
         } else {
-            Icon(
-                painter = painterResource(Res.drawable.ic_logo),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onBackground,
-                modifier = logoModifier,
+            Wordmark(
+                logoHeight = logoHeight,
+                fontSize = style.fontSize * MUSIC_TO_FONT,
+                color = MaterialTheme.colorScheme.onBackground,
+                gap = 2.dp,
+                modifier = Modifier.padding(bottom = 14.dp),
             )
         }
+        HorizontalDivider(
+            thickness = 1.dp,
+            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+        )
         // "Listen now" is hidden for now; the wordmark above stays.
         // Text(
         //     text = title,
@@ -506,10 +822,10 @@ private fun HomeTitle(
 }
 
 /** The wordmark's height against the heading's font size. */
-private const val LOGO_TO_FONT = 0.9f
+private const val LOGO_TO_FONT = 0.70f
 
-/** ic_logo's viewport, 732 x 440 (~1.67:1). */
-private const val LOGO_ASPECT = 732f / 440f
+/** The "Music" word's size against the heading's font size. */
+private const val MUSIC_TO_FONT = 0.88f
 
 /**
  * Shared by the home feed, Explore and Library so headings line up across tabs.
@@ -531,7 +847,7 @@ internal fun SectionHeader(title: String, subtitle: String = "", onShowAll: (() 
         Column(Modifier.weight(1f)) {
             Text(
                 text = displayTitle,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
@@ -565,10 +881,14 @@ internal fun localizeShelfTitle(title: String): String {
         trimmed.equals("Recents", ignoreCase = true) ||
             trimmed.equals("Recently played", ignoreCase = true) ||
             trimmed.equals("Gần đây", ignoreCase = true) ||
+            trimmed.equals("Terakhir diputar", ignoreCase = true) ||
+            trimmed.equals("Diputar baru-baru ini", ignoreCase = true) ||
             trimmed.equals("最近", ignoreCase = true) ->
             stringResource(Res.string.shelf_recents)
         trimmed.equals("Playlists", ignoreCase = true) ||
             trimmed.equals("Danh sách phát", ignoreCase = true) ||
+            trimmed.equals("Playlist", ignoreCase = true) ||
+            trimmed.equals("Daftar putar", ignoreCase = true) ||
             trimmed.equals("再生リスト", ignoreCase = true) ->
             stringResource(Res.string.playlists)
         trimmed.equals("Albums", ignoreCase = true) ||
@@ -577,37 +897,57 @@ internal fun localizeShelfTitle(title: String): String {
             stringResource(Res.string.albums)
         trimmed.equals("Artists", ignoreCase = true) ||
             trimmed.equals("Nghệ sĩ", ignoreCase = true) ||
+            trimmed.equals("Artis", ignoreCase = true) ||
             trimmed.equals("アーティスト", ignoreCase = true) ->
             stringResource(Res.string.artists)
         trimmed.equals("Subscriptions", ignoreCase = true) ||
             trimmed.equals("Đã đăng ký", ignoreCase = true) ||
+            trimmed.equals("Langganan", ignoreCase = true) ||
             trimmed.equals("登録チャンネル", ignoreCase = true) ->
             stringResource(Res.string.subscriptions)
         trimmed.equals("Trending community playlists", ignoreCase = true) ||
             trimmed.equals("Danh sách phát cộng đồng thịnh hành", ignoreCase = true) ||
+            trimmed.equals("Playlist komunitas yang sedang tren", ignoreCase = true) ||
+            trimmed.equals("Playlist komunitas populer", ignoreCase = true) ||
             trimmed.equals("Danh sách phát thịnh hành trong cộng đồng người dùng", ignoreCase = true) ||
             trimmed.equals("急上昇のコミュニティ再生リスト", ignoreCase = true) ->
             stringResource(Res.string.shelf_trending_community_playlists)
         trimmed.equals("Featured playlists for you", ignoreCase = true) ||
             trimmed.equals("Danh sách phát đề xuất cho bạn", ignoreCase = true) ||
+            trimmed.equals("Playlist pilihan untuk Anda", ignoreCase = true) ||
+            trimmed.equals("Playlist unggulan untuk Anda", ignoreCase = true) ||
             trimmed.equals("Danh sách phát nổi bật dành cho bạn", ignoreCase = true) ||
             trimmed.equals("おすすめの再生リスト", ignoreCase = true) ->
             stringResource(Res.string.shelf_featured_playlists_for_you)
+        SPEED_DIAL_TITLES.any { trimmed.equals(it, ignoreCase = true) } ->
+            stringResource(Res.string.shelf_speed_dial)
         trimmed.equals("Quick picks", ignoreCase = true) ||
             trimmed.equals("Lựa chọn nhanh", ignoreCase = true) ||
+            trimmed.equals("Pilihan cepat", ignoreCase = true) ||
             trimmed.equals("Chọn nhanh đài phát", ignoreCase = true) ||
             trimmed.equals("クイック ミックス", ignoreCase = true) ->
             stringResource(Res.string.shelf_quick_picks)
         trimmed.equals("Listen again", ignoreCase = true) ||
             trimmed.equals("Nghe lại", ignoreCase = true) ||
+            trimmed.equals("Dengarkan lagi", ignoreCase = true) ||
             trimmed.equals("もう一度聴く", ignoreCase = true) ->
             stringResource(Res.string.shelf_listen_again)
         trimmed.equals("Mixed for you", ignoreCase = true) ||
             trimmed.equals("Dành riêng cho bạn", ignoreCase = true) ||
+            trimmed.equals("Mix untuk Anda", ignoreCase = true) ||
+            trimmed.equals("Campuran untuk Anda", ignoreCase = true) ||
             trimmed.equals("ミックス", ignoreCase = true) ->
             stringResource(Res.string.shelf_mixed_for_you)
         trimmed.startsWith("Similar to", ignoreCase = true) -> {
             val rest = trimmed.substring(10).trim()
+            stringResource(Res.string.shelf_similar_to, rest)
+        }
+        trimmed.startsWith("Mirip dengan", ignoreCase = true) -> {
+            val rest = trimmed.substring(12).trim()
+            stringResource(Res.string.shelf_similar_to, rest)
+        }
+        trimmed.startsWith("Serupa dengan", ignoreCase = true) -> {
+            val rest = trimmed.substring(13).trim()
             stringResource(Res.string.shelf_similar_to, rest)
         }
         trimmed.startsWith("Tương tự như", ignoreCase = true) -> {
@@ -616,42 +956,62 @@ internal fun localizeShelfTitle(title: String): String {
         }
         trimmed.equals("Forgotten favorites", ignoreCase = true) ||
             trimmed.equals("Giai điệu quen thuộc", ignoreCase = true) ||
+            trimmed.equals("Favorit terlupakan", ignoreCase = true) ||
+            trimmed.equals("Favorit yang terlupakan", ignoreCase = true) ||
             trimmed.equals("よく聴いたお気に入りの曲", ignoreCase = true) ->
             stringResource(Res.string.shelf_forgotten_favorites)
         trimmed.equals("Recommended music videos", ignoreCase = true) ||
             trimmed.equals("Video âm nhạc đề xuất", ignoreCase = true) ||
+            trimmed.equals("Video musik yang direkomendasikan", ignoreCase = true) ||
+            trimmed.equals("Video musik rekomendasi", ignoreCase = true) ||
             trimmed.equals("おすすめのミュージック ビデオ", ignoreCase = true) ->
             stringResource(Res.string.shelf_recommended_music_videos)
         trimmed.equals("From your library", ignoreCase = true) ||
             trimmed.equals("Từ thư viện của bạn", ignoreCase = true) ||
+            trimmed.equals("Dari perpustakaan Anda", ignoreCase = true) ||
+            trimmed.equals("Dari koleksi Anda", ignoreCase = true) ||
+            trimmed.equals("Dari pustaka Anda", ignoreCase = true) ||
             trimmed.equals("ライブラリから", ignoreCase = true) ->
             stringResource(Res.string.shelf_from_your_library)
         trimmed.equals("Charts", ignoreCase = true) ||
             trimmed.equals("Bảng xếp hạng", ignoreCase = true) ||
+            trimmed.equals("Tangga lagu", ignoreCase = true) ||
+            trimmed.equals("Chart", ignoreCase = true) ||
             trimmed.equals("チャート", ignoreCase = true) ->
             stringResource(Res.string.shelf_charts)
         trimmed.equals("New releases", ignoreCase = true) ||
             trimmed.equals("Bản phát hành mới", ignoreCase = true) ||
+            trimmed.equals("Rilis baru", ignoreCase = true) ||
+            trimmed.equals("Rilisan baru", ignoreCase = true) ||
             trimmed.equals("最新リリース", ignoreCase = true) ->
             stringResource(Res.string.shelf_new_releases)
         trimmed.equals("Top music videos", ignoreCase = true) ||
             trimmed.equals("Video âm nhạc hàng đầu", ignoreCase = true) ||
+            trimmed.equals("Video musik teratas", ignoreCase = true) ||
+            trimmed.equals("Video musik terpopuler", ignoreCase = true) ||
             trimmed.equals("人気のミュージック ビデオ", ignoreCase = true) ->
             stringResource(Res.string.shelf_top_music_videos)
         trimmed.equals("For you", ignoreCase = true) ||
             trimmed.equals("Dành cho bạn", ignoreCase = true) ||
+            trimmed.equals("Untuk Anda", ignoreCase = true) ||
+            trimmed.equals("Untukmu", ignoreCase = true) ||
             trimmed.equals("あなたへのおすすめ", ignoreCase = true) ->
             stringResource(Res.string.shelf_for_you)
         trimmed.equals("Hits today", ignoreCase = true) ||
             trimmed.equals("Today's Hits", ignoreCase = true) ||
             trimmed.equals("Bản hit hôm nay", ignoreCase = true) ||
+            trimmed.equals("Hits hari ini", ignoreCase = true) ||
+            trimmed.equals("Hit hari ini", ignoreCase = true) ||
             trimmed.equals("今日のヒット曲", ignoreCase = true) ->
             stringResource(Res.string.shelf_hits_today)
         trimmed.equals("Artists on the rise", ignoreCase = true) ||
-            trimmed.equals("Nghệ sĩ đang lên", ignoreCase = true) ->
+            trimmed.equals("Nghệ sĩ đang lên", ignoreCase = true) ||
+            trimmed.equals("Artis yang sedang naik daun", ignoreCase = true) ||
+            trimmed.equals("Artis yang sedang naik", ignoreCase = true) ->
             stringResource(Res.string.shelf_artists_on_the_rise)
         trimmed.equals("Concerts", ignoreCase = true) ||
             trimmed.equals("Buổi hòa nhạc", ignoreCase = true) ||
+            trimmed.equals("Konser", ignoreCase = true) ||
             trimmed.equals("コンサート", ignoreCase = true) ->
             stringResource(Res.string.shelf_concerts)
         trimmed.startsWith("Shorts", ignoreCase = true) ||
@@ -660,8 +1020,16 @@ internal fun localizeShelfTitle(title: String): String {
             stringResource(Res.string.shelf_shorts)
         trimmed.equals("Trending", ignoreCase = true) ||
             trimmed.equals("Thịnh hành", ignoreCase = true) ||
+            trimmed.equals("Sedang tren", ignoreCase = true) ||
+            trimmed.equals("Tren", ignoreCase = true) ||
             trimmed.equals("急上昇", ignoreCase = true) ->
             stringResource(Res.string.shelf_trending)
+        trimmed.equals("New albums & singles", ignoreCase = true) ||
+            trimmed.equals("New albums and singles", ignoreCase = true) ||
+            trimmed.equals("Album & single baru", ignoreCase = true) ||
+            trimmed.equals("Album & single terbaru", ignoreCase = true) ||
+            trimmed.equals("Album dan single terbaru", ignoreCase = true) ->
+            stringResource(Res.string.shelf_new_albums_singles)
         else -> title
     }
 }
@@ -672,14 +1040,17 @@ internal fun localizeShelfSubtitle(subtitle: String): String {
         trimmed.equals("TOP TUNES RIGHT NOW", ignoreCase = true) ||
             trimmed.equals("Top tunes right now", ignoreCase = true) ||
             trimmed.equals("Giai điệu hàng đầu hiện nay", ignoreCase = true) ||
+            trimmed.equals("Lagu teratas saat ini", ignoreCase = true) ||
             trimmed.equals("注目の曲", ignoreCase = true) ->
             stringResource(Res.string.shelf_top_tunes_right_now)
         trimmed.equals("From the community", ignoreCase = true) ||
             trimmed.equals("Từ cộng đồng", ignoreCase = true) ||
+            trimmed.equals("Dari komunitas", ignoreCase = true) ||
             trimmed.equals("コミュニティより", ignoreCase = true) ->
             stringResource(Res.string.shelf_from_the_community)
         trimmed.equals("YouTube Charts", ignoreCase = true) ||
             trimmed.equals("Bảng xếp hạng YouTube", ignoreCase = true) ||
+            trimmed.equals("Tangga Lagu YouTube", ignoreCase = true) ||
             trimmed.equals("YouTube チャート", ignoreCase = true) ->
             stringResource(Res.string.shelf_youtube_charts)
         else -> subtitle
@@ -700,32 +1071,163 @@ internal fun localizeCardSubtitle(subtitle: String): String {
         val lower = trimmed.lowercase(Locale.ROOT)
         when {
             trimmed.equals("Song", ignoreCase = true) || trimmed.equals("Titre", ignoreCase = true) ||
-                trimmed.equals("Bài hát", ignoreCase = true) || trimmed.equals("曲", ignoreCase = true) -> songLabel
+                trimmed.equals("Bài hát", ignoreCase = true) || trimmed.equals("曲", ignoreCase = true) ||
+                trimmed.equals("Lagu", ignoreCase = true) -> songLabel
             trimmed.equals("Single", ignoreCase = true) || trimmed.equals("Đĩa đơn", ignoreCase = true) ||
                 trimmed.equals("シングル", ignoreCase = true) -> singleLabel
             trimmed.equals("Chart", ignoreCase = true) || trimmed.equals("Bảng xếp hạng", ignoreCase = true) ||
-                trimmed.equals("チャート", ignoreCase = true) -> chartLabel
+                trimmed.equals("チャート", ignoreCase = true) || trimmed.equals("Tangga lagu", ignoreCase = true) -> chartLabel
             trimmed.equals("Playlist", ignoreCase = true) || trimmed.equals("Danh sách phát", ignoreCase = true) ||
                 trimmed.equals("再生リスト", ignoreCase = true) -> playlistLabel
             lower.endsWith(" views") || lower.endsWith(" view") || lower.endsWith(" lượt xem") ||
-                lower.endsWith(" 回視聴") || lower.endsWith("回視聴") -> {
+                lower.endsWith(" 回視聴") || lower.endsWith("回視聴") || lower.endsWith(" tayangan") ||
+                lower.endsWith(" penayangan") -> {
                 val count = trimmed.substringBeforeLast(' ', "").trim()
                 if (count.any { it.isDigit() }) stringResource(Res.string.card_views_format, count) else part
             }
             lower.endsWith(" plays") || lower.endsWith(" play") || lower.endsWith(" lượt phát") ||
-                lower.endsWith(" 回再生") || lower.endsWith("回再生") -> {
+                lower.endsWith(" 回再生") || lower.endsWith("回再生") || lower.endsWith(" pemutaran") ||
+                lower.endsWith(" diputar") -> {
                 val count = trimmed.substringBeforeLast(' ', "").trim()
                 if (count.any { it.isDigit() }) stringResource(Res.string.card_plays_format, count) else part
             }
             lower.endsWith(" songs") || lower.endsWith(" song") || lower.endsWith(" bài hát") ||
-                lower.endsWith(" 曲") || lower.endsWith("曲") -> {
+                lower.endsWith(" 曲") || lower.endsWith("曲") || lower.endsWith(" lagu") -> {
                 val count = trimmed.substringBeforeLast(' ', "").trim()
                 if (count.any { it.isDigit() }) stringResource(Res.string.card_songs_format, count) else part
+            }
+            lower.endsWith(" monthly listeners") || lower.endsWith(" audiens bulanan") ||
+                lower.endsWith(" pendengar bulanan") -> {
+                val count = trimmed.substringBeforeLast(' ', "").substringBeforeLast(' ', "").trim()
+                if (count.any { it.isDigit() }) stringResource(Res.string.card_monthly_listeners_format, count) else part
             }
             else -> part
         }
     }
     return localizedParts.joinToString(delimiter)
+}
+
+/**
+ * Kunci stabil untuk tiap kartu rak: videoId, lalu browseId, lalu judul.
+ * Kembaran dalam satu rak diberi akhiran, karena LazyList menolak kunci ganda.
+ */
+private fun shelfItemKeys(items: List<ShelfItem>): List<String> {
+    val seen = HashMap<String, Int>(items.size)
+    return items.map { item ->
+        val base = "i:" + (item.videoId ?: item.browseId ?: "${item.title}|${item.subtitle}")
+        val n = seen.merge(base, 1, Int::plus)!!
+        if (n == 1) base else "$base#$n"
+    }
+}
+
+@Composable
+private fun HeroShelf(
+    shelf: HomeShelf,
+    onItemClick: (ShelfItem) -> Unit,
+    onItemLongPress: ((ShelfItem) -> Unit)? = null,
+    currentSong: Song? = null,
+    isPlaying: Boolean = false,
+) {
+    Column(Modifier.padding(bottom = 26.dp)) {
+        SectionHeader(shelf.title, shelf.subtitle)
+        val isCurrentItem = shelf.items.playingItemMatcher(currentSong)
+        val itemKeys = remember(shelf.items) { shelfItemKeys(shelf.items) }
+        // Measured rather than taken as a share of the parent, because the card
+        // has a ceiling as well as a fraction — see [heroCardWidth]. A fixed
+        // width is also the only one of the two the aspect ratio below can turn
+        // into a height, so the card keeps its shape however it was arrived at.
+        BoxWithConstraints {
+            val cardWidth = heroCardWidth(maxWidth)
+            ShelfRow(
+                state = rememberShelfListState("hero:${shelf.title}"),
+                contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                itemsIndexed(
+                    shelf.items,
+                    key = { index, _ -> itemKeys[index] },
+                    contentType = { _, _ -> "hero-card" },
+                ) { index, item ->
+                    HeroCard(
+                        item = item,
+                        onClick = { onItemClick(item) },
+                        onLongPress = onItemLongPress?.let { { it(item) } },
+                        modifier = Modifier.shelfStagger(index).width(cardWidth),
+                        isCurrent = isCurrentItem(item),
+                        isPlaying = isCurrentItem(item) && isPlaying,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Big card: artwork with the caption laid over a scrim, as on Listen Now. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun HeroCard(
+    item: ShelfItem,
+    onClick: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+    isCurrent: Boolean = false,
+    isPlaying: Boolean = false,
+) {
+    val heroToken = remember { Any() }
+    val openHeroWithCover = rememberCoverFlightTap(item.browseId, heroToken, onClick)
+    Box(
+        modifier = modifier
+            .aspectRatio(HERO_CARD_RATIO)
+            .clip(RoundedCornerShape(18.dp))
+            .thumbnailBorder(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .longPressMenuClickable(
+                onClick = openHeroWithCover,
+                onLongClick = onLongPress,
+            )
+            .contextClick(onLongPress),
+    ) {
+        AsyncImage(
+            model = item.thumbnailUrl.artworkAt(HEADER_ART_PX),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .coverFlightSource(heroToken, item.thumbnailUrl.artworkAt(HEADER_ART_PX), 18.dp)
+                .fillMaxSize()
+                .clip(RoundedCornerShape(18.dp)),
+        )
+        if (isCurrent && isPlaying) SearchPlayingBars(Modifier.align(Alignment.Center))
+        Column(
+            modifier = Modifier
+                .hideDuringCoverFlight(heroToken)
+                .fillMaxWidth()
+                .align(Alignment.BottomStart)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(Color.Transparent, Color.Black.copy(alpha = 0.78f)),
+                    ),
+                )
+                .padding(start = 16.dp, end = 16.dp, top = 34.dp, bottom = 14.dp),
+        ) {
+            Text(
+                text = item.title,
+                style = MaterialTheme.typography.titleLarge,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (item.subtitle.isNotBlank()) {
+                val displaySubtitle = localizeCardSubtitle(item.subtitle)
+                Text(
+                    text = displaySubtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White.copy(alpha = 0.72f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -748,28 +1250,36 @@ internal fun Shelf(
     Column(Modifier.padding(bottom = 26.dp)) {
         SectionHeader(shelf.title, shelf.subtitle)
         val isCurrentItem = shelf.items.playingItemMatcher(currentSong)
+        val itemKeys = remember(shelf.items) { shelfItemKeys(shelf.items) }
         ShelfRow(
+            state = rememberShelfListState("shelf:${shelf.title}"),
             contentPadding = PaddingValues(horizontal = PAGE_GUTTER),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             leadingCard?.let { card -> item(key = "leading") { card() } }
-            items(shelf.items) { item ->
-                if (shelf.layout == ShelfLayout.VIDEO) {
-                    VideoShelfCard(
-                        item = item,
-                        onClick = { onItemClick(item) },
-                        onLongPress = onItemLongPress?.let { { it(item) } },
-                        isCurrent = isCurrentItem(item),
-                        isPlaying = isCurrentItem(item) && isPlaying,
-                    )
-                } else {
-                    ShelfCard(
-                        item = item,
-                        onClick = { onItemClick(item) },
-                        onLongPress = onItemLongPress?.let { { it(item) } },
-                        isCurrent = isCurrentItem(item),
-                        isPlaying = isCurrentItem(item) && isPlaying,
-                    )
+            itemsIndexed(
+                shelf.items,
+                key = { index, _ -> itemKeys[index] },
+                contentType = { _, _ -> "shelf-card" },
+            ) { index, item ->
+                Box(Modifier.shelfStagger(index)) {
+                    if (shelf.layout == ShelfLayout.VIDEO) {
+                        VideoShelfCard(
+                            item = item,
+                            onClick = { onItemClick(item) },
+                            onLongPress = onItemLongPress?.let { { it(item) } },
+                            isCurrent = isCurrentItem(item),
+                            isPlaying = isCurrentItem(item) && isPlaying,
+                        )
+                    } else {
+                        ShelfCard(
+                            item = item,
+                            onClick = { onItemClick(item) },
+                            onLongPress = onItemLongPress?.let { { it(item) } },
+                            isCurrent = isCurrentItem(item),
+                            isPlaying = isCurrentItem(item) && isPlaying,
+                        )
+                    }
                 }
             }
         }
@@ -835,7 +1345,7 @@ fun VideoShelfCard(
     }
 }
 
-/** A music video's frame, or a square one when the listener asked for that — see [VideoThumbnails]. */
+/** A music video's frame, or a square one when square video covers are on. */
 val VIDEO_ASPECT: Float get() = if (VideoThumbnails.square) 1f else 16f / 9f
 
 /** Wide enough that a 16:9 card stands about as tall as a square [SHELF_CARD_WIDTH] one. */
@@ -909,7 +1419,13 @@ internal fun NewShelfCard(
  * copies of the same box.
  */
 @Composable
-private fun ServiceCard(colors: List<Color>, trackKey: String, icon: ImageVector) {
+private fun ServiceCard(
+    colors: List<Color>,
+    trackKey: String,
+    icon: ImageVector,
+    /** How much of the card's own colours is laid back over the mesh on a light theme. */
+    lightLift: Float = 0f,
+) {
     val palette = remember { MeshPalette(colors) }
     Box(
         modifier = Modifier
@@ -924,6 +1440,16 @@ private fun ServiceCard(colors: List<Color>, trackKey: String, icon: ImageVector
             continuous = true,
             blurRadius = 24.dp,
         )
+        // Light theme only: the mesh clamps every colour it is given into a
+        // dark band, which on a white page reads heavy. Laying the card's own
+        // colours back over it restores the tile's intended brightness.
+        if (lightLift > 0f && MaterialTheme.colorScheme.surface.luminance() > 0.5f) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(Brush.linearGradient(colors.map { it.copy(alpha = lightLift) })),
+            )
+        }
         Icon(
             imageVector = icon,
             contentDescription = null,
@@ -945,9 +1471,14 @@ internal fun ShelfCard(
     isCurrent: Boolean = false,
     isPlaying: Boolean = false,
 ) {
+    val coverToken = remember { Any() }
+    val openWithCover = rememberCoverFlightTap(item.browseId, coverToken, onClick)
     Column(
         modifier = modifier
-            .longPressMenuClickable(onClick = onClick, onLongClick = onLongPress)
+            .longPressMenuClickable(
+                onClick = openWithCover,
+                onLongClick = onLongPress,
+            )
             .contextClick(onLongPress),
     ) {
         when (item.browseId) {
@@ -979,6 +1510,12 @@ internal fun ShelfCard(
                 trackKey = "local:all",
                 icon = Icons.Rounded.LibraryMusic,
             )
+            YtMusicRepository.LIKED_MUSIC -> ServiceCard(
+                colors = listOf(Color(0xFFFF7AB8), Color(0xFF9B6CFF)),
+                trackKey = YtMusicRepository.LIKED_MUSIC,
+                icon = Icons.Rounded.Favorite,
+                lightLift = 0.6f,
+            )
             "local:cache" -> ServiceCard(
                 colors = listOf(Color(0xFF42275A), Color(0xFF734B6D)),
                 trackKey = "local:cache",
@@ -997,6 +1534,7 @@ internal fun ShelfCard(
             else -> {
                 Box(
                     modifier = Modifier
+                        .coverFlightSource(coverToken, item.thumbnailUrl.artworkAt(CARD_ART_PX), 12.dp)
                         .fillMaxWidth()
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(12.dp))

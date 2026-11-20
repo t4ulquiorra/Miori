@@ -37,6 +37,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.miori.music.data.model.Song
 import com.miori.music.ui.graphics.fadingEdges
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.ui.draw.clipToBounds
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.miori.music.ui.player.PlayerSettings
 
 fun Modifier.thumbnailBorder(shape: Shape): Modifier = composed {
     this.border(
@@ -86,12 +97,108 @@ fun ExplicitSongTitle(
 }
 
 /**
+ * Which way the change that brought a song on screen went. Every text that
+ * shows the song asks it, so the big player and the mini player slide the
+ * same way: back to the song before the last one is Previous, anything else
+ * is Next.
+ */
+object TrackFlow {
+    private const val HINT_VALID_MS = 2_000L
+    private const val TRAIL_SIZE = 32
+
+    /** Lagu yang sudah tampil, berurutan seperti riwayat browser; [cursor] menunjuk yang sekarang. */
+    private val trail = ArrayList<String>()
+    private var cursor = -1
+    private var currentId: String? = null
+    private var forward = true
+    private var hintForward: Boolean? = null
+    private var hintAt = 0L
+
+    /** Dipanggil saat Next/Previous ditekan, supaya arah animasi pasti. Dipakai satu kali saja. */
+    fun hint(forward: Boolean) {
+        hintForward = forward
+        hintAt = System.currentTimeMillis()
+    }
+
+    fun forwardTo(id: String): Boolean {
+        // Lagu yang sama (mini player dan player besar menanyakan hal yang sama):
+        // jawabannya sudah ditentukan oleh yang pertama bertanya.
+        if (id == currentId) return forward
+        // Petunjuk dibuang begitu dipakai, supaya perubahan lagu berikutnya yang bukan
+        // dari tombol (auto-advance, tap antrean, notifikasi) tidak ikut arah yang lama.
+        val hinted = hintForward?.takeIf { System.currentTimeMillis() - hintAt < HINT_VALID_MS }
+        hintForward = null
+        val at = trail.lastIndexOf(id)
+        // Tanpa petunjuk: kembali ke lagu yang ada di belakang riwayat berarti mundur.
+        val back = hinted?.not() ?: (at in 0 until cursor)
+        if (back) {
+            if (at in 0 until cursor) {
+                cursor = at
+            } else {
+                // Previous ke lagu yang belum pernah tampil: ia jadi yang paling depan.
+                trail.add(0, id)
+                cursor = 0
+            }
+        } else if (at > cursor) {
+            // Maju lagi ke lagu yang tadi ditinggalkan.
+            cursor = at
+        } else {
+            // Lagu baru: yang ada di depan kursor dibuang, lalu ditambahkan.
+            while (trail.size > cursor + 1) trail.removeAt(trail.lastIndex)
+            trail.add(id)
+            cursor = trail.lastIndex
+        }
+        if (trail.size > TRAIL_SIZE) {
+            trail.removeAt(0)
+            cursor = (cursor - 1).coerceAtLeast(0)
+        }
+        forward = !back
+        currentId = id
+        return forward
+    }
+}
+
+/**
+ * Title and artist that slide out and in, sideways and faded, when the song
+ * changes: to the left on Next, to the right on Previous, as Apple Music's
+ * players do. A cut that keeps the same words stays put. With reduced
+ * animation it is a plain cross-fade.
+ */
+@Composable
+fun TrackTextSwitch(song: Song, modifier: Modifier = Modifier, content: @Composable (Song) -> Unit) {
+    val reduceAnimation by PlayerSettings.reduceAnimation.collectAsStateWithLifecycle()
+    val forward = TrackFlow.forwardTo(song.videoId)
+    AnimatedContent(
+        targetState = song,
+        contentKey = { it.videoId },
+        transitionSpec = {
+            if (reduceAnimation) {
+                fadeIn(tween(150)) togetherWith fadeOut(tween(150))
+            } else {
+                val sign = if (forward) 1 else -1
+                (
+                    slideInHorizontally(tween(340, easing = FastOutSlowInEasing)) { width -> sign * width / 4 } +
+                        fadeIn(tween(260, delayMillis = 60))
+                    ) togetherWith (
+                    slideOutHorizontally(tween(340, easing = FastOutSlowInEasing)) { width -> -sign * width / 4 } +
+                        fadeOut(tween(160))
+                    )
+            }
+        },
+        modifier = modifier.clipToBounds(),
+        label = "trackText",
+    ) { shown -> content(shown) }
+}
+
+/**
  * One line of text that, where it is too long for its width, fades out at its
  * end rather than ending in an ellipsis — see [fadingEdges].
  */
 @Composable
 fun FadingLine(text: String, style: TextStyle, color: Color, modifier: Modifier = Modifier) {
-    var overflowing by remember { mutableStateOf(false) }
+    // Read at draw time only: the fade layer stays in place while the text
+    // slides, so it no longer flickers as the overflow is measured.
+    var fadeAmount by remember { mutableStateOf(0f) }
     Text(
         text = text,
         style = style,
@@ -99,10 +206,8 @@ fun FadingLine(text: String, style: TextStyle, color: Color, modifier: Modifier 
         maxLines = 1,
         softWrap = false,
         overflow = TextOverflow.Clip,
-        onTextLayout = { overflowing = it.didOverflowWidth },
-        // Only where it overflows: the fade is a layer of its own, and a line
-        // that fits has nothing to fade.
-        modifier = modifier.then(if (overflowing) Modifier.fadingEdges(LINE_FADE, end = FullFade) else Modifier),
+        onTextLayout = { fadeAmount = if (it.didOverflowWidth) 1f else 0f },
+        modifier = modifier.fadingEdges(LINE_FADE, end = { fadeAmount }),
     )
 }
 
@@ -141,8 +246,6 @@ fun FadingText(text: String, style: TextStyle, color: Color, maxLines: Int, modi
  * Music's mini player, about 37pt, ending at the edge of the line's space.
  */
 val LINE_FADE = 36.dp
-
-private val FullFade = { 1f }
 
 /**
  * The explicit mark, as Apple Music draws it: a filled tile with the E cut

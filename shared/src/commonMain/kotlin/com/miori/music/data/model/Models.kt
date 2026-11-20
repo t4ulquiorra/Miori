@@ -21,6 +21,23 @@ data class ArtistRef(
     val browseId: String? = null,
 )
 
+/**
+ * Lagu paling populer di sebuah album, untuk titik penanda seperti Apple Music.
+ * Dipilih dari jumlah putar yang dinyatakan baris album: sepertiga teratas
+ * (minimal 1, maksimal 5). Kosong bila album terlalu pendek atau jumlah putar
+ * tersedia untuk kurang dari separuh barisnya.
+ */
+fun List<Song>.popularTrackIds(): Set<String> {
+    if (size < POPULAR_MIN_TRACKS) return emptySet()
+    val counted = filter { (it.playCount ?: 0L) > 0L }
+    if (counted.size * 2 < size) return emptySet()
+    val take = (size / 3).coerceIn(1, POPULAR_MAX_TRACKS)
+    return counted.sortedByDescending { it.playCount }.take(take).mapTo(HashSet()) { it.videoId }
+}
+
+private const val POPULAR_MIN_TRACKS = 4
+private const val POPULAR_MAX_TRACKS = 5
+
 /** A playable YouTube Music track. */
 data class Song(
     val videoId: String,
@@ -141,6 +158,8 @@ data class Song(
      * non-history rows (e.g. search results, library).
      */
     val feedbackToken: String? = null,
+    /** Jumlah putar yang dinyatakan baris album YouTube Music; null bila baris tidak menyebutnya. */
+    val playCount: Long? = null,
 ) {
     /** Legacy derived property: true if and only if [queueTier] is [QueueTier.AUTOPLAY]. */
     val fromAutoplay: Boolean get() = queueTier == QueueTier.AUTOPLAY
@@ -471,7 +490,7 @@ data class HomeShelf(
     val layout: ShelfLayout = ShelfLayout.CARDS,
 )
 
-/** These shelves without their music videos, and without any shelf that leaves empty. */
+/** These shelves without their music videos, and without any shelf that ends up empty. */
 fun List<HomeShelf>.withoutVideos(): List<HomeShelf> = mapNotNull { shelf ->
     if (shelf.layout == ShelfLayout.VIDEO) return@mapNotNull null
     val items = shelf.items.filterNot { it.isVideo }
@@ -518,6 +537,29 @@ fun List<HomeShelf>.withoutRepeatsOf(existing: List<HomeShelf>): List<HomeShelf>
 private const val REPEAT_SHELF_SHARE = 0.6
 
 private fun HomeShelf.browseKeys(): Set<String> = items.mapNotNullTo(HashSet()) { it.browseId }
+
+/**
+ * These shelves minus every card already on [other] (the Home feed), and minus any shelf
+ * left with too few cards to be worth a row. A card is matched by its album, playlist or
+ * artist page, or by its track when it has no page.
+ */
+fun List<HomeShelf>.withoutItemsOn(other: List<HomeShelf>): List<HomeShelf> {
+    if (other.isEmpty()) return this
+    val seen = other.flatMapTo(HashSet()) { shelf -> shelf.items.mapNotNull { it.cardKey() } }
+    return mapNotNull { shelf ->
+        val kept = shelf.items.filter { item -> item.cardKey()?.let { it !in seen } ?: true }
+        when {
+            kept.size == shelf.items.size -> shelf
+            kept.size >= MIN_SHELF_CARDS_LEFT -> shelf.copy(items = kept)
+            else -> null
+        }
+    }
+}
+
+/** Fewest cards a shelf keeps after its repeats of Home are taken out; fewer and the row is dropped. */
+private const val MIN_SHELF_CARDS_LEFT = 3
+
+private fun ShelfItem.cardKey(): String? = browseId?.let { "b:$it" } ?: videoId?.let { "v:$it" }
 
 /** A page of the Home feed, plus the token for the next one — null once exhausted. */
 data class HomeFeed(
@@ -604,6 +646,10 @@ data class DetailPage(
      * fetched with a session; see [SubscriptionState].
      */
     val subscription: SubscriptionState? = null,
+    /** Cover-cover yang membentuk mosaic sleeve (halaman Most Played); kosong untuk halaman lain. */
+    val covers: List<String> = emptyList(),
+    /** Judul Made for You Mix: sleeve halaman ini menggambar blob cairan mix itu. */
+    val mix: String? = null,
 )
 
 /**
@@ -687,7 +733,8 @@ data class UserPlaylist(
     val subtitle: String,
     val thumbnailUrl: String?,
 ) {
-    val browseId: String get() = "VL$playlistId"
+    val browseId: String get() =
+        if (playlistId.startsWith("local:playlist:")) playlistId else "VL$playlistId"
 }
 
 /**
