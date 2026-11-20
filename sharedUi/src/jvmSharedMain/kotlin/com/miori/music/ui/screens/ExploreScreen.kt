@@ -23,7 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshState
+import com.miori.music.ui.components.ElasticRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -63,7 +63,7 @@ fun ExploreScreen(
     onRetry: () -> Unit,
     refreshing: Boolean,
     onRefresh: () -> Unit,
-    pullState: PullToRefreshState,
+    pullState: ElasticRefreshState,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
     /** The big "Explore" heading; the desktop's pages carry none. */
@@ -74,6 +74,7 @@ fun ExploreScreen(
         onRefresh = onRefresh,
         state = pullState,
         modifier = modifier,
+        topInset = contentPadding.calculateTopPadding(),
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val columns = moodColumns(maxWidth)

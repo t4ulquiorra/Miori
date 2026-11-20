@@ -70,8 +70,29 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.PullToRefreshState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -815,27 +836,343 @@ fun DownloadedBadge(videoId: String, tint: Color, modifier: Modifier = Modifier)
  * is why [state] is hoisted: the bar lives beside this content, not inside it,
  * and has to follow the same drag.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+private val ELASTIC_PULL_THRESHOLD = 80.dp
+private val ELASTIC_PULL_HOLD = 56.dp
+private val ELASTIC_PULL_RANGE = 600.dp
+private const val ELASTIC_PULL_RUBBER = 0.6f
+private const val ELASTIC_PULL_START_GRACE_MS = 600L
+private const val ELASTIC_PULL_MIN_HOLD_MS = 900L
+
+private val ELASTIC_SPOKE_COS = FloatArray(12) { cos((-90.0 + it * 30.0) * PI / 180.0).toFloat() }
+private val ELASTIC_SPOKE_SIN = FloatArray(12) { sin((-90.0 + it * 30.0) * PI / 180.0).toFloat() }
+
+/**
+ * State of the elastic pull-to-refresh: the whole page follows the finger with
+ * rubber-band physics, is held at a rest distance while a refresh runs, and
+ * springs back smoothly when it ends.
+ */
+@Stable
+class ElasticRefreshState internal constructor(private val scope: CoroutineScope) {
+    /** How far the page is pushed down, in px. Read in layer/draw blocks only. */
+    var offset by mutableFloatStateOf(0f)
+        private set
+
+    /** True while the pull is past the refresh threshold. */
+    var armed by mutableStateOf(false)
+        private set
+
+    /** True from a releasing pull that started a refresh until the refresh is over. */
+    var holding by mutableStateOf(false)
+        private set
+
+    /** True while a finger is pulling the page (as opposed to it settling on its own). */
+    var pulling by mutableStateOf(false)
+        private set
+
+    val distanceFraction: Float
+        get() = (offset / thresholdPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+
+    internal var thresholdPx = 0f
+        private set
+    private var holdPx = 0f
+    private var rangePx = 1f
+    private var rawDrag = 0f
+    private var dragging = false
+    private var started = false
+    private var finishing = false
+    private var holdStartNs = 0L
+    private var anim: Job? = null
+
+    internal fun configure(thresholdPx: Float, holdPx: Float, rangePx: Float) {
+        this.thresholdPx = thresholdPx
+        this.holdPx = holdPx
+        this.rangePx = rangePx
+    }
+
+    private fun resist(x: Float): Float =
+        rangePx * (1f - 1f / (x * ELASTIC_PULL_RUBBER / rangePx + 1f))
+
+    private fun unresist(y: Float): Float {
+        val p = (y / rangePx).coerceIn(0f, 0.98f)
+        return rangePx * (1f / (1f - p) - 1f) / ELASTIC_PULL_RUBBER
+    }
+
+    /** Moves the page by [delta] finger px (down is positive); returns what was used. */
+    internal fun dragBy(delta: Float): Float {
+        if (!dragging) {
+            anim?.cancel()
+            anim = null
+            rawDrag = unresist(offset)
+            dragging = true
+            pulling = true
+        }
+        val next = (rawDrag + delta).coerceAtLeast(0f)
+        val used = next - rawDrag
+        rawDrag = next
+        offset = resist(next)
+        if (!armed && offset >= thresholdPx) {
+            armed = true
+        } else if (armed && offset < thresholdPx * 0.92f) {
+            armed = false
+        }
+        return used
+    }
+
+    /** The finger lifted. True if the page was pulled and the release was handled here. */
+    internal fun release(refreshingNow: Boolean, onRefresh: () -> Unit): Boolean {
+        if (!dragging) return false
+        dragging = false
+        pulling = false
+        rawDrag = 0f
+        if (offset <= 0f) {
+            armed = false
+            return false
+        }
+        val fire = armed && !holding
+        armed = false
+        if (fire) {
+            holding = true
+            finishing = false
+            started = refreshingNow
+            holdStartNs = System.nanoTime()
+            settleTo(holdPx)
+            onRefresh()
+            scope.launch {
+                delay(ELASTIC_PULL_START_GRACE_MS)
+                if (holding && !started) finish()
+            }
+        } else {
+            settleTo(0f)
+        }
+        return true
+    }
+
+    internal fun onRefreshingChanged(refreshing: Boolean) {
+        if (refreshing) {
+            started = true
+        } else if (holding && started) {
+            finish()
+        }
+    }
+
+    internal fun onAttach() {
+        dragging = false
+        pulling = false
+        rawDrag = 0f
+        armed = false
+        if (!holding && offset > 0f) settleTo(0f)
+    }
+
+    private fun finish() {
+        if (finishing) return
+        finishing = true
+        scope.launch {
+            val elapsedMs = (System.nanoTime() - holdStartNs) / 1_000_000L
+            val remaining = ELASTIC_PULL_MIN_HOLD_MS - elapsedMs
+            if (remaining > 0L) delay(remaining)
+            holding = false
+            started = false
+            finishing = false
+            if (!dragging) settleTo(0f)
+        }
+    }
+
+    private fun settleTo(target: Float) {
+        anim?.cancel()
+        anim = scope.launch {
+            animate(
+                initialValue = offset,
+                targetValue = target,
+                animationSpec = spring(dampingRatio = 0.9f, stiffness = 260f),
+            ) { value, _ -> offset = value.coerceAtLeast(0f) }
+        }
+    }
+}
+
+@Composable
+fun rememberElasticRefreshState(): ElasticRefreshState {
+    val scope = rememberCoroutineScope()
+    return remember(scope) { ElasticRefreshState(scope) }
+}
+
+private class ElasticRefreshConnection(
+    private val state: ElasticRefreshState,
+    private val isRefreshing: () -> Boolean,
+    private val onRefresh: () -> Unit,
+) : NestedScrollConnection {
+    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+        if (source != NestedScrollSource.UserInput || state.holding) return Offset.Zero
+        // Pushing back up: the page gives its offset back before the list scrolls.
+        if (available.y < 0f && state.offset > 0f) return Offset(0f, state.dragBy(available.y))
+        return Offset.Zero
+    }
+
+    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+        if (source != NestedScrollSource.UserInput || state.holding) return Offset.Zero
+        // What the list could not take is the pull past its top edge.
+        if (available.y > 0f) return Offset(0f, state.dragBy(available.y))
+        return Offset.Zero
+    }
+
+    override suspend fun onPreFling(available: Velocity): Velocity =
+        if (state.release(isRefreshing(), onRefresh)) available else Velocity.Zero
+}
+
+/**
+ * Pull-to-refresh for the tab feeds: the whole page follows the finger with
+ * rubber-band physics, revealing a 12-spoke activity spinner in the opened gap.
+ */
 @Composable
 fun PullToRefresh(
     refreshing: Boolean,
     onRefresh: () -> Unit,
-    state: PullToRefreshState,
+    state: ElasticRefreshState,
     modifier: Modifier = Modifier,
+    topInset: Dp = 0.dp,
     content: @Composable () -> Unit,
 ) {
     if (!LocalPullToRefreshEnabled.current) {
         Box(modifier.fillMaxSize()) { content() }
         return
     }
-    PullToRefreshBox(
-        isRefreshing = refreshing,
-        onRefresh = onRefresh,
-        state = state,
-        modifier = modifier.fillMaxSize(),
-        indicator = {},
-    ) {
-        content()
+    val density = LocalDensity.current
+    remember(density.density) {
+        state.configure(
+            thresholdPx = with(density) { ELASTIC_PULL_THRESHOLD.toPx() },
+            holdPx = with(density) { ELASTIC_PULL_HOLD.toPx() },
+            rangePx = with(density) { ELASTIC_PULL_RANGE.toPx() },
+        )
+    }
+    val haptics = rememberHaptics()
+    val latestRefreshing by rememberUpdatedState(refreshing)
+    val latestOnRefresh by rememberUpdatedState(onRefresh)
+    val connection = remember(state) {
+        ElasticRefreshConnection(state, { latestRefreshing }, { latestOnRefresh() })
+    }
+    LaunchedEffect(state) { state.onAttach() }
+    LaunchedEffect(refreshing) { state.onRefreshingChanged(refreshing) }
+    LaunchedEffect(state) {
+        snapshotFlow { state.armed }.collect { if (it) haptics.play(Haptic.Tick) }
+    }
+    Box(modifier.fillMaxSize().nestedScroll(connection)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { translationY = state.offset },
+        ) {
+            content()
+        }
+        RefreshInputBlocker(state = state)
+        ElasticRefreshHint(state = state, topInset = topInset)
+    }
+}
+
+@Composable
+private fun RefreshInputBlocker(state: ElasticRefreshState) {
+    if (!state.holding) return
+    Box(
+        Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+                    }
+                }
+            },
+    )
+}
+
+@Composable
+private fun ElasticRefreshHint(state: ElasticRefreshState, topInset: Dp) {
+    val visible by remember(state) { derivedStateOf { state.offset > 0f } }
+    if (!visible) return
+
+    val color = MaterialTheme.colorScheme.onSurfaceVariant
+    val holding = state.holding
+
+    val angle: Float
+    if (holding) {
+        val spin = rememberInfiniteTransition(label = "elasticRefreshSpin")
+        val a by spin.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(960, easing = LinearEasing)),
+            label = "elasticRefreshAngle",
+        )
+        angle = a
+    } else {
+        angle = 0f
+    }
+
+    val blend by animateFloatAsState(
+        targetValue = if (holding) 1f else 0f,
+        animationSpec = tween(280),
+        label = "elasticRefreshBlend",
+    )
+
+    val mode = when {
+        holding -> 2
+        state.armed -> 1
+        else -> 0
+    }
+    val label = stringResource(
+        when (mode) {
+            2 -> Res.string.pull_refreshing
+            1 -> Res.string.pull_release
+            else -> Res.string.pull_to_refresh
+        },
+    )
+
+    val density = LocalDensity.current
+    val insetPx = with(density) { topInset.toPx() }
+    val halfPx = with(density) { 21.dp.toPx() }
+    val fadeStartPx = with(density) { 18.dp.toPx() }
+    val fadeSpanPx = with(density) { 36.dp.toPx() }
+
+    Box(Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .graphicsLayer {
+                    val currentOffset = state.offset
+                    translationY = insetPx + currentOffset / 2f - halfPx
+                    alpha = ((currentOffset - fadeStartPx) / fadeSpanPx).coerceIn(0f, 1f)
+                },
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Canvas(Modifier.size(22.dp)) {
+                val currentOffset = state.offset
+                val progress = (currentOffset / state.thresholdPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val inner = 5.5.dp.toPx()
+                val outer = 10.dp.toPx()
+                val strokeWidth = 2.2.dp.toPx()
+                val head = (angle / 30f).toInt() % 12
+                for (i in 0 until 12) {
+                    val pullAlpha = (progress * 12f - i).coerceIn(0f, 1f) * 0.5f
+                    val behind = (head - i + 12) % 12
+                    val spinAlpha = 1f - behind * 0.075f
+                    val a = pullAlpha + (spinAlpha - pullAlpha) * blend
+                    if (a <= 0.01f) continue
+                    val dx = ELASTIC_SPOKE_COS[i]
+                    val dy = ELASTIC_SPOKE_SIN[i]
+                    drawLine(
+                        color = color.copy(alpha = a),
+                        start = Offset(center.x + dx * inner, center.y + dy * inner),
+                        end = Offset(center.x + dx * outer, center.y + dy * outer),
+                        strokeWidth = strokeWidth,
+                        cap = StrokeCap.Round,
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = color,
+            )
+        }
     }
 }
 

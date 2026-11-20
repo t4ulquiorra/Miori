@@ -278,4 +278,7 @@
     <string name="mix_view_seconds">%1$d sec</string>
     <string name="mix_view_bpm">%1$d bpm</string>
     <string name="automix_overview_unavailable">No Automix transition coming up</string>
+    <string name="pull_to_refresh">Pull to refresh</string>
+    <string name="pull_release">Release to refresh</string>
+    <string name="pull_refreshing">Refreshing…</string>
 </resources>

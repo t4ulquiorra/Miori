@@ -87,7 +87,7 @@ import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import com.miori.music.ui.components.rememberElasticRefreshState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -1233,11 +1233,11 @@ private fun MioriApp(
         else -> searchListState
     }
 
-    // Pull-to-refresh: the drag lives with the feed, but the indicator is the
-    // line under the top bar, so the state has to be visible to both.
-    val homePull = rememberPullToRefreshState()
-    val explorePull = rememberPullToRefreshState()
-    val libraryPull = rememberPullToRefreshState()
+    // Pull-to-refresh: the drag lives with the feed, revealing an elastic
+    // spoke indicator in the gap opened at the top.
+    val homePull = rememberElasticRefreshState()
+    val explorePull = rememberElasticRefreshState()
+    val libraryPull = rememberElasticRefreshState()
     val refreshing by viewModel.refreshing.collectAsStateWithLifecycle()
     val currentFeed = when {
         route != null || detail != null -> null

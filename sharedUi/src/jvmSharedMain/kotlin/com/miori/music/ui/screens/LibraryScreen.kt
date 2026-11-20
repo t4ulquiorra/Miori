@@ -35,7 +35,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshState
+import com.miori.music.ui.components.ElasticRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -100,7 +100,7 @@ fun LibraryScreen(
     onRetry: () -> Unit,
     refreshing: Boolean,
     onRefresh: () -> Unit,
-    pullState: PullToRefreshState,
+    pullState: ElasticRefreshState,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues,
     /**
@@ -124,6 +124,7 @@ fun LibraryScreen(
         onRefresh = onRefresh,
         state = pullState,
         modifier = modifier,
+        topInset = contentPadding.calculateTopPadding(),
     ) {
         LazyColumn(
             state = listState,
