@@ -807,34 +807,6 @@ private fun WhileShown(shown: () -> Boolean, content: @Composable () -> Unit) {
  * Whether the full-bleed artwork switch is worth listing in Settings for a
  * window this wide. Public so the settings sheet can leave the switch out
  * entirely where it would do nothing.
- *
- * A window narrow enough that the player fills it is where the setting
- * acts: edge to edge there means the artwork *is* the screen. The tablet
- * half is left from the docked player, whose phone-width pane ran the
- * artwork edge to edge too; with the pane gone the portrait player no
- * longer goes full bleed at these widths, but the switch is still listed
- * there, unchanged, until that is decided on its own.
- */
-fun fullBleedArtworkAvailable(windowWidth: Dp): Boolean =
-    playerFillsWindow(windowWidth) || tabletSizedPlayer(windowWidth)
-
-/**
- * Whether a player given the whole of a window this wide is still narrow enough
- * to run its artwork edge to edge.
- */
-private fun playerFillsWindow(windowWidth: Dp): Boolean =
-    windowWidth <= PLAYER_MAX_WIDTH + PLAYER_GUTTER * 2
-
-/**
- * Whether the player is tablet-sized — see [TABLET_PLAYER_MIN_WIDTH].
- *
- * [windowWidth] is the width of the *window*, measured rather than read off
- * `Configuration.screenWidthDp`: in a freeform or desktop window that can
- * report the display instead of the window, and it lands a beat late when
- * the window is dragged.
- */
-private fun tabletSizedPlayer(windowWidth: Dp): Boolean =
-    windowWidth >= TABLET_PLAYER_MIN_WIDTH
 
 /**
  * Whether the player takes its landscape shape: the sleeve and the lyrics /
