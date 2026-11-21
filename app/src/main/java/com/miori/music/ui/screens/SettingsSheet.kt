@@ -4196,6 +4196,7 @@ internal fun <T> ChoiceGroup(
                 }
             }
         }
+    }
 }
 
 private const val COMMUNITY_REDDIT_URL = ""

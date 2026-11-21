@@ -4157,6 +4157,7 @@ private fun MioriApp(
                 val artistListState = detail
                     ?.takeIf { isDetailVisible && it.type == BrowseType.ARTIST }
                     ?.let { detailListStates.getOrPut(it.browseId) { LazyListState() } }
+                val homeHeadingVisible = route == null && detail == null && selectedTab == TAB_HOME
                 val headerListState = artistListState ?: homeListState.takeIf { homeHeadingVisible }
                 // Header (foto profil + pill) turun/naik antara posisi Home dan tab lain
                 // dengan spring sedikit membal, bukan loncat saat tab berpindah.
