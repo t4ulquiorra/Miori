@@ -803,10 +803,6 @@ private fun WhileShown(shown: () -> Boolean, content: @Composable () -> Unit) {
     if (shown()) content()
 }
 
-/**
- * Whether the full-bleed artwork switch is worth listing in Settings for a
- * window this wide. Public so the settings sheet can leave the switch out
- * entirely where it would do nothing.
 
 /**
  * Whether the player takes its landscape shape: the sleeve and the lyrics /
