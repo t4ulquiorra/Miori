@@ -181,11 +181,6 @@ private fun HeroShelfSkeleton() {
 @Composable
 fun EditorialShelfSkeleton() {
     Column(Modifier.padding(bottom = 26.dp)) {
-        Column(Modifier.padding(horizontal = PAGE_GUTTER, vertical = 10.dp)) {
-            SkeletonLine(fraction = 0.5f, height = 22.dp)
-            Spacer(Modifier.height(8.dp))
-            SkeletonLine(fraction = 0.66f, height = 14.dp)
-        }
         BoxWithConstraints {
             val cardWidth = maxWidth - PAGE_GUTTER - 36.dp
             LazyRow(

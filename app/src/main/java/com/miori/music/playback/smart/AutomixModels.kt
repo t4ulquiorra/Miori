@@ -119,7 +119,7 @@ object AutomixModels {
         }
     }
     private const val BASE_URL =
-        "https://github.com/rezapranata089-bit/Miori/raw/main/app/src/main/assets/"
+        "https://github.com/t4ulquiorra/Miori/raw/main/app/src/main/assets/"
 
     private val names get() = listOf(BeatTracker.MODEL_ASSET, VocalTracker.MODEL_ASSET)
 

@@ -47,7 +47,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 
-private const val STAR_REPO_URL = "https://github.com/rezapranata089-bit/Miori"
+private const val STAR_REPO_URL = "https://github.com/t4ulquiorra/Miori"
 
 /**
  * When to ask for a GitHub star. GitHub can't tell the app who has already

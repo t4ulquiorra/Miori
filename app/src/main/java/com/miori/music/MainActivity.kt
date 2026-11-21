@@ -238,7 +238,6 @@ import com.miori.music.ui.components.macOSPopupMorph
 import com.miori.music.ui.components.IosMenuPlacement
 import com.miori.music.ui.components.IosMenuPopover
 import com.miori.music.ui.components.IosMenuRow
-import com.miori.music.ui.components.SourceMenuRequest
 import com.miori.music.ui.components.SongActionsMenu
 import com.miori.music.ui.components.HeldContextMenu
 import com.miori.music.ui.components.cancelCoverFlight
@@ -260,14 +259,7 @@ import com.miori.music.ui.components.FLOATING_BAR_MAX_WIDTH
 import com.miori.music.ui.components.FloatingBottomBar
 import com.miori.music.ui.components.GlassMiniPlayer
 import com.miori.music.ui.components.GlassNavBar
-import com.miori.music.ui.components.GlassSearchBar
-import com.miori.music.ui.components.searchMiniRise
-import com.miori.music.ui.components.searchMiniHide
-import androidx.compose.ui.layout.layout
-import com.miori.music.ui.components.GlassSearchMorph
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.WindowInsets
+import com.miori.music.ui.screens.SegmentedControl
 import com.miori.music.ui.components.floatingtabbar.rememberFloatingTabBarScrollConnection
 import com.miori.music.ui.components.FrostedTopBar
 import com.miori.music.ui.components.LastfmLoginAlert
@@ -311,7 +303,6 @@ import com.miori.music.ui.screens.LocalMixCoverBackground
 import com.miori.music.ui.components.OrganicFluidBackground
 import com.miori.music.ui.screens.MostPlayedArt
 import com.miori.music.ui.components.SearchField
-import com.miori.music.ui.components.SearchBottomField
 import com.miori.music.sharedui.resources.Res as SharedRes
 import com.miori.music.sharedui.resources.search_hint
 import com.miori.music.sharedui.resources.search_addons_hint
@@ -704,13 +695,12 @@ private fun MioriApp(
     // Local backdrop for the Search tab: records the mood grid so the fixed
     // header above it can draw a blurred copy of what scrolls underneath.
     val searchBackdrop = rememberLayerBackdrop()
+    val searchHeaderTint = MaterialTheme.colorScheme.background.copy(alpha = 0.55f)
     // What folds [GlassNavBar] between its expanded and inline shapes. Held here
     // rather than inside the bar because the page's scroll is what drives it,
     // and the page is a sibling of the bar rather than a child.
     val navBarScroll = rememberFloatingTabBarScrollConnection(expandThreshold = 250.dp)
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    // Bar index of the last tab that was not Search; the search morph folds to it.
-    var lastBarTab by remember { mutableIntStateOf(0) }
     // Explore loads the first time it's shown, not at launch beside Home.
     LaunchedEffect(selectedTab) {
         // The Search tab's categories come from the same feed Explore loads.
@@ -965,37 +955,6 @@ private fun MioriApp(
     // Whether the top bar's search field has focus. The Search tab shows its
     // categories while it has none and the recent searches once it does.
     var searchFieldFocused by remember { mutableStateOf(false) }
-    // Separate Search on liquid glass: the field only opens after the Search
-    // circle is tapped while already on the categories.
-    var searchFieldOpen by remember { mutableStateOf(false) }
-    // The target the search bar animates to; searchFieldOpen stays true until
-    // the close animation has finished, so the bar is not swapped out mid-fold.
-    var searchFieldExpanded by remember { mutableStateOf(false) }
-    // Menu sumber (YouTube / Library / Addons) yang diminta globe di bar pencarian.
-    // Digambar di root, di luar Column bar, supaya tidak memakan layout bar.
-    var searchSourceMenu by remember { mutableStateOf<SourceMenuRequest?>(null) }
-    // Whether the field opened out of the collapsed (inline) nav bar, and how far
-    // the bar has opened: the mini player rises and widens on that same spring.
-    var searchFromInline by remember { mutableStateOf(false) }
-    // Height of the bar stack that floats over the Search page (mini player, notice,
-    // the search bar); with the keyboard it is the room the suggestions must leave.
-    var searchStackHeightPx by remember { mutableIntStateOf(0) }
-    val searchListImeInsets = WindowInsets.ime
-    val searchListDensity = LocalDensity.current
-    val searchListInset: () -> Int = remember(searchListImeInsets, searchListDensity) {
-        { searchStackHeightPx + searchListImeInsets.getBottom(searchListDensity) }
-    }
-    // Height of the bars under the plain bottom search field (no morph), reported
-    // by the floating bars. The field sits above the taller of these and the
-    // keyboard, so the suggestions leave that room plus the field's own height.
-    var searchBottomBarsPx by remember { mutableIntStateOf(0) }
-    val searchBottomFieldInset: () -> Int = remember(searchListImeInsets, searchListDensity) {
-        {
-            maxOf(searchBottomBarsPx, searchListImeInsets.getBottom(searchListDensity)) +
-                with(searchListDensity) { (10.dp + 48.dp).roundToPx() }
-        }
-    }
-    var searchOpenState by remember { mutableStateOf<androidx.compose.runtime.State<Float>?>(null) }
     // Invalidates an in-flight radio lookup when a later play request wins.
     var playRequestGeneration by remember { mutableIntStateOf(0) }
     // Starting radio from the item already playing must not replace that media
@@ -4029,62 +3988,34 @@ private fun MioriApp(
                                 // suggestions and filters, and a gap reads as a break.
                                 topPadding = topBarHeight() + 4.dp,
                                 showField = false,
-                                showTitle = true,
-                                // Filter control rises to where the profile was (status bar + gap).
-                                filterBarTopPadding = topBarHeight() - com.miori.music.ui.components.TopBarContentHeight + 8.dp,
-                                bottomAnchorInset = if (glassActive && searchTabSeparate) {
-                                    if (searchFieldOpen) searchListInset else null
-                                } else {
-                                    // The plain bottom field: suggestions grow up from it too.
-                                    searchBottomFieldInset
-                                },
                                 listModifier = if (glassSamplesBackdrop) {
                                     Modifier.layerBackdrop(searchBackdrop)
                                 } else {
                                     Modifier
                                 },
-                                headerBlur = !reduceDynamicBlur &&
-                                    android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S,
+                                headerModifier = if (glassSamplesBackdrop) {
+                                    Modifier.drawPlainBackdrop(
+                                        backdrop = searchBackdrop,
+                                        shape = { androidx.compose.ui.graphics.RectangleShape },
+                                        effects = { blur(24.dp.toPx()) },
+                                        onDrawSurface = { drawRect(searchHeaderTint) },
+                                    )
+                                } else {
+                                    Modifier
+                                },
 
                                 // The settings page's own two-state selector, so the
                                 // app has one look for "pick one of these".
-                                sourceLabels = listOf(
-                                    stringResource(R.string.search_source_youtube),
-                                    stringResource(R.string.library),
-                                    stringResource(R.string.search_source_addons),
-                                ),
-                                sourceIndex = searchSource.ordinal,
-                                onSourceSelect = { index -> onSearchSourceChange(SearchSource.entries[index]) },
-                                sourceMenu = { open, anchor, onDismiss, entries ->
-                                    IosMenuPopover(
-                                        item = if (open) Unit else null,
-                                        anchor = anchor,
-                                        onDismiss = onDismiss,
-                                        backdrop = searchBackdrop,
-                                        placement = IosMenuPlacement.AboveStart,
-                                        dimBackground = false,
-                                        glassRim = true,
-                                        frostAlpha = 0.3f,
-                                        startOffset = (-32).dp,
-                                    ) {
-                                        entries.forEach { entry ->
-                                            IosMenuRow(
-                                                label = entry.label,
-                                                icon = entry.icon,
-                                                onClick = entry.onClick,
-                                                enabled = entry.enabled,
-                                                labelColor = if (entry.selected) MaterialTheme.colorScheme.primary else null,
-                                                trailing = if (entry.selected) ({
-                                                    Icon(
-                                                        imageVector = Icons.Rounded.Check,
-                                                        contentDescription = null,
-                                                        tint = MaterialTheme.colorScheme.primary,
-                                                        modifier = Modifier.size(20.dp),
-                                                    )
-                                                }) else null,
-                                            )
-                                        }
-                                    }
+                                sourceSwitcher = {
+                                    SegmentedControl(
+                                        options = listOf(
+                                            stringResource(R.string.search_source_youtube),
+                                            stringResource(R.string.library),
+                                            stringResource(R.string.search_source_addons),
+                                        ),
+                                        selectedIndex = searchSource.ordinal,
+                                        onSelect = { index -> onSearchSourceChange(SearchSource.entries[index]) },
+                                    )
                                 },
                                 exploreState = exploreState,
                                 onCategoryClick = viewModel::openMoodGenre,
@@ -4226,27 +4157,6 @@ private fun MioriApp(
                 val artistListState = detail
                     ?.takeIf { isDetailVisible && it.type == BrowseType.ARTIST }
                     ?.let { detailListStates.getOrPut(it.browseId) { LazyListState() } }
-                val homeHeadingVisible = route == null && detail == null && selectedTab == TAB_HOME
-                // Search's large heading is up (field empty, unfocused, nothing searched):
-                // the pill sits level with it as it does on Home. Derived, so typing
-                // recomposes this only when the heading appears or goes.
-                val searchTitleShown by remember(route, detail, selectedMoodGenre, selectedTab) {
-                    derivedStateOf {
-                        route == null && detail == null && selectedMoodGenre == null &&
-                            selectedTab == TAB_SEARCH &&
-                            query.isEmpty() && results == null && !searchFieldFocused
-                    }
-                }
-                // Search results with the filter control up top: the profile pill folds away
-                // for it. Mirrors the page's own condition (results up, no suggestions, YouTube source).
-                val searchFilterBarShown by remember(route, detail, selectedMoodGenre, selectedTab, searchSource) {
-                    derivedStateOf {
-                        route == null && detail == null && selectedMoodGenre == null &&
-                            selectedTab == TAB_SEARCH &&
-                            searchSource != SearchSource.LIBRARY && searchSource != SearchSource.ADDONS &&
-                            results != null && searchSuggestions.isEmpty()
-                    }
-                }
                 val headerListState = artistListState ?: homeListState.takeIf { homeHeadingVisible }
                 // Header (foto profil + pill) turun/naik antara posisi Home dan tab lain
                 // dengan spring sedikit membal, bukan loncat saat tab berpindah.
@@ -4257,16 +4167,6 @@ private fun MioriApp(
                         stiffness = 260f,
                     ),
                     label = "homeHeaderBlend",
-                )
-                // Its own blend, so going between Home and Search hands the pill over
-                // on the same spring instead of jumping when Home was scrolled.
-                val searchHeaderBlend = animateFloatAsState(
-                    targetValue = if (searchTitleShown) 1f else 0f,
-                    animationSpec = androidx.compose.animation.core.spring(
-                        dampingRatio = 0.5f,
-                        stiffness = 260f,
-                    ),
-                    label = "searchHeaderBlend",
                 )
                 val fadeStart = if (artistListState != null) TOP_FADE_START else 0f
                 val fadeRamp = if (artistListState != null) TOP_FADE_RAMP else 1f
@@ -4358,10 +4258,8 @@ private fun MioriApp(
                     floatingTitleAlpha = {
                         (1f - pageScroll.floatValue / pageTitleFadePx).coerceIn(0f, 1f)
                     },
-                    actionsHidden = showAccountSelector && !accountSelectorLeaving,
-                    actionsCollapsed = searchFilterBarShown,
-                    // Judul besar "Search" ada di header halaman selama field kosong
-                    // dan belum fokus; judul bar baru naik setelah itu hilang.
+                    // Search has no large in-list header to hand the title back to —
+                    // the field takes that space — so its bar title is always up.
                     scrolled = {
                         when {
                             // The page leads with its own large "Replay", so the bar
@@ -4371,10 +4269,7 @@ private fun MioriApp(
                             detail != null && detailActiveShelf != null -> true
                             detail != null -> detailScrolled
                             selectedMoodGenre != null -> true
-                            else -> scrolled || (
-                                selectedTab == TAB_SEARCH &&
-                                    (query.isNotEmpty() || results != null || searchFieldFocused)
-                                )
+                            else -> scrolled || selectedTab == TAB_SEARCH
                         }
                     },
                     refreshing = currentFeed != null && currentFeed in refreshing,
@@ -4388,31 +4283,50 @@ private fun MioriApp(
                         .align(Alignment.TopCenter)
                         .graphicsLayer {
                             val blend = homeHeaderBlend.value
-                            val searchBlend = searchHeaderBlend.value
-                            if (blend != 0f || searchBlend != 0f) {
+                            if (blend != 0f) {
                                 val rest = (18.dp + homeLogoHalf).toPx()
-                                var shift = 0f
-                                if (blend != 0f) {
-                                    val scrolledPx = if (homeListState.firstVisibleItemIndex > 0) {
-                                        rest
-                                    } else {
-                                        homeListState.firstVisibleItemScrollOffset.toFloat()
-                                    }
-                                    shift += blend * (rest - scrolledPx).coerceAtLeast(0f)
+                                val scrolledPx = if (homeListState.firstVisibleItemIndex > 0) {
+                                    rest
+                                } else {
+                                    homeListState.firstVisibleItemScrollOffset.toFloat()
                                 }
-                                if (searchBlend != 0f) {
-                                    val scrolledPx = if (searchListState.firstVisibleItemIndex > 0) {
-                                        rest
-                                    } else {
-                                        searchListState.firstVisibleItemScrollOffset.toFloat()
-                                    }
-                                    shift += searchBlend * (rest - scrolledPx).coerceAtLeast(0f)
-                                }
-                                translationY = shift
+                                translationY = blend * (rest - scrolledPx).coerceAtLeast(0f)
                             }
                         },
-                    // Field search pindah ke bawah (SearchBottomField), bukan lagi di bar atas.
-                    accessory = null,
+                    // Only on the Search tab itself, not on anything pushed over it.
+                    accessory = if (
+                        selectedTab == TAB_SEARCH && route == null && detail == null && selectedMoodGenre == null
+                    ) {
+                        {
+                            // The search field lives up here in the bar, beside the
+                            // account photo, so it answers the nav bar's Search tap
+                            // itself: focus and keyboard, the way the page used to.
+                            val keyboard = LocalSoftwareKeyboardController.current
+                            LaunchedEffect(searchFocusRequested) {
+                                if (searchFocusRequested) {
+                                    searchFieldFocus.requestFocus()
+                                    keyboard?.show()
+                                    searchFocusRequested = false
+                                }
+                            }
+                            SearchField(
+                                query = query,
+                                onQueryChange = viewModel::onQueryChange,
+                                onSubmit = viewModel::submitSearch,
+                                focusRequester = searchFieldFocus,
+                                onFocusChange = { searchFieldFocused = it },
+                                placeholder = org.jetbrains.compose.resources.stringResource(
+                                    if (searchSource == SearchSource.LIBRARY) {
+                                        SharedRes.string.search_library_hint
+                                    } else if (searchSource == SearchSource.ADDONS) {
+                                        SharedRes.string.search_addons_hint
+                                    } else {
+                                        SharedRes.string.search_hint
+                                    },
+                                ),
+                            )
+                        }
+                    } else null,
                     actions = {
                         // This is intentionally scoped to Listen together: the
                         // round-trip time is meaningful while coordinating a
@@ -4700,13 +4614,7 @@ private fun MioriApp(
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
 
-                // Whichever bar is drawing reports its height here, for the
-                // guard to read at layout — never in composition, see the guard.
                 val floatingBarsHeight = remember { mutableIntStateOf(0) }
-                LaunchedEffect(Unit) {
-                    androidx.compose.runtime.snapshotFlow { floatingBarsHeight.intValue }
-                        .collect { searchBottomBarsPx = it }
-                }
                 FloatingBarsTapGuard(
                     barsHeight = { floatingBarsHeight.intValue },
                     modifier = Modifier.align(Alignment.BottomCenter),
@@ -4724,11 +4632,6 @@ private fun MioriApp(
                     route == AppRoute.ListenTogether -> TAB_LIBRARY
                     selectedTab >= TAB_LIBRARY -> selectedTab + 1
                     else -> selectedTab
-                }
-                // Remember the last tab that was not Search. Read only off a
-                // tab, never off Search, so the morph always has a tab to fold to.
-                LaunchedEffect(selectedTab, selectedBarIndex) {
-                    if (selectedTab != TAB_SEARCH) lastBarTab = selectedBarIndex
                 }
                 val onTabSelected: (Int) -> Unit = tabSelected@{ barIndex ->
                     if (listenTogetherTab && barIndex == TAB_LIBRARY) {
@@ -4757,212 +4660,14 @@ private fun MioriApp(
                     // page's first frame instead of after it, so there is no visible jump.
                     if (index == TAB_SEARCH) searchListState.requestScrollToItem(0)
                     searchFieldFocused = false
-                    searchFromInline = glassActive && searchTabSeparate &&
-                        index == TAB_SEARCH && navBarScroll.isInline
-                    // The inline state belongs to Search's own scrolling. Leaving Search
-                    // expands the bar again, so Home shows the mini player above it.
-                    if (index != TAB_SEARCH && navBarScroll.isInline) navBarScroll.expand()
-                    searchFieldOpen = reopenField
-                    searchFieldExpanded = reopenField
 
                     if (index == TAB_SEARCH) {
                         viewModel.onQueryChange("")
-                        // Liquid glass separate Search: the circle only expands here.
-                        // Focus (keyboard + recent searches) waits for a tap on the input.
-                        searchFocusRequested = reopenField && !(glassActive && searchTabSeparate)
+                        searchFocusRequested = reopenField
                     }
                 }
 
-                // Field search melayang di atas nav bar (gaya Apple Music), baik
-                // Search terpisah maupun menyatu di pill. Naik mengikuti keyboard.
-                val searchActive = selectedTab == TAB_SEARCH && route == null && detail == null && selectedMoodGenre == null
-                // Separate Search on liquid glass: the bar itself becomes the search morph.
-                val searchMorph = searchActive && glassActive && searchTabSeparate && searchFieldOpen
-                // Leaving the categories (tab, category page, route) closes the field.
-                LaunchedEffect(searchActive) {
-                    if (!searchActive) {
-                        searchFieldOpen = false
-                    } else if (glassActive && searchTabSeparate && !searchFieldOpen) {
-                        // Back from a category page or route: expand again, unfocused.
-                        searchFromInline = navBarScroll.isInline
-                        searchFieldFocused = false
-                        searchFieldOpen = true
-                        searchFieldExpanded = true
-                    }
-                }
-                if (searchActive && !searchMorph && !(glassActive && searchTabSeparate)) {
-                    SearchBottomField(
-                        query = query,
-                        onQueryChange = viewModel::onQueryChange,
-                        onSubmit = viewModel::submitSearch,
-                        focusRequester = searchFieldFocus,
-                        focusRequested = searchFocusRequested,
-                        onFocusHandled = { searchFocusRequested = false },
-                        onFocusChange = { searchFieldFocused = it },
-                        placeholder = org.jetbrains.compose.resources.stringResource(
-                            if (searchSource == SearchSource.LIBRARY) {
-                                SharedRes.string.search_library_hint
-                            } else if (searchSource == SearchSource.ADDONS) {
-                                SharedRes.string.search_addons_hint
-                            } else {
-                                SharedRes.string.search_hint
-                            },
-                        ),
-                        barsHeight = { floatingBarsHeight.intValue },
-                        onSourceMenuClick = { anchor ->
-                            val sourceIcons = listOf(SfIcons.PlayCircle, MioriIcons.TabLibrary, SfIcons.Extension)
-                            val sourceNames = listOf(
-                                context.getString(R.string.search_source_youtube),
-                                context.getString(R.string.library),
-                                context.getString(R.string.search_source_addons),
-                            )
-                            searchSourceMenu = SourceMenuRequest(
-                                anchor = anchor,
-                                entries = sourceNames.mapIndexed { index, label ->
-                                    com.miori.music.ui.player.LyricsMenuEntry(
-                                        label = label,
-                                        icon = sourceIcons[index],
-                                        enabled = true,
-                                        selected = index == searchSource.ordinal,
-                                        onClick = {
-                                            searchSourceMenu = null
-                                            viewModel.setSearchSource(SearchSource.entries[index])
-                                            if (query.isNotBlank()) viewModel.submitSearch()
-                                        },
-                                    )
-                                },
-                                onDismiss = { searchSourceMenu = null },
-                            )
-                        },
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .widthIn(max = FLOATING_BAR_MAX_WIDTH)
-                            .fillMaxWidth(),
-                    )
-                }
-
-                // Read here, in composition: WindowInsets.ime is a @Composable getter.
-                val imeInsets = WindowInsets.ime
-                // The mini player steps aside while the input is focused with the
-                // keyboard up, and returns when the keyboard closes or focus leaves.
-                val searchDensity = LocalDensity.current
-                val searchImeOpen by remember {
-                    androidx.compose.runtime.derivedStateOf { imeInsets.getBottom(searchDensity) > 0 }
-                }
-                val miniHide by androidx.compose.animation.core.animateFloatAsState(
-                    targetValue = if (searchFieldFocused && searchImeOpen) 1f else 0f,
-                    animationSpec = androidx.compose.animation.core.spring(
-                        dampingRatio = 0.9f,
-                        stiffness = 600f,
-                    ),
-                    label = "searchMiniHide",
-                )
-                // The bar's own open progress, read straight from its spring (no hoisted
-                // copy that lags a frame, no recomposition mid-animation): the mini
-                // player's rise, width and density all follow this one value.
-                val miniOpenProgress: () -> Float = { searchOpenState?.value?.coerceIn(0f, 1f) ?: 0f }
-                if (searchMorph) Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .widthIn(max = FLOATING_BAR_MAX_WIDTH)
-                        .fillMaxWidth()
-                        // Lifts the whole stack, mini player included, above the keyboard.
-                        .offset { IntOffset(0, -imeInsets.getBottom(this)) }
-                        .onSizeChanged {
-                            floatingBarsHeight.intValue = it.height
-                            searchStackHeightPx = it.height
-                        },
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    QueueActionNoticeHost(queueNotice)
-                    player.song?.let { song ->
-                        GlassMiniPlayer(
-                            song = song,
-                            isPlaying = player.isPlaying,
-                            isLoading = playPauseBusy,
-                            onPlayPause = {
-                                togglePlayPause()
-                            },
-                            onNext = { controller?.seekToNextMediaItem() },
-                            onPrevious = { controller?.seekToPrevious() },
-                            onExpand = if (reducePlayerMotion) {
-                                { showNowPlaying = true }
-                            } else {
-                                playerSheetMotion::open
-                            },
-                            controlsLocked = controlsLocked,
-                            onBlockedControl = showHostOnlyNotice,
-                            dock = activeDock,
-                            pull = playerSheetMotion.takeIf { !reducePlayerMotion },
-                            inlineDensity = searchFromInline,
-                            inlineProgress = if (searchFromInline) {
-                                { 1f - miniOpenProgress() }
-                            } else {
-                                null
-                            },
-                            // From the collapsed bar the pill starts in its slot between
-                            // the circles and rises while the Search circle opens leftward.
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .searchMiniHide { miniHide }
-                                .searchMiniRise { if (searchFromInline) miniOpenProgress() else 1f },
-                        )
-                        // Gap shrinks as the search morph opens: the visible search circle is
-                        // ~7dp lower than the 62dp nav pill, so the mini player drops to fill it.
-                        Spacer(
-                            Modifier.layout { _, constraints ->
-                                val p = miniOpenProgress().coerceIn(0f, 1f)
-                                val gapPx = (8.dp.toPx() + (1.dp.toPx() - 8.dp.toPx()) * p).toInt()
-                                layout(constraints.maxWidth, gapPx) {}
-                            },
-                        )
-                    }
-                    GlassSearchBar(
-                        startInline = searchFromInline,
-                        onOpenState = { searchOpenState = it },
-                        tabs = barTabs.dropLast(1),
-                        lastTab = barTabs[lastBarTab.coerceIn(0, barTabs.lastIndex)],
-                        open = searchFieldExpanded,
-                        onLastTabClick = { searchFieldExpanded = false },
-                        onClose = { searchFieldExpanded = false },
-                        onClosed = {
-                            searchFieldFocused = false
-                            searchFieldOpen = false
-                            // Selama morph tampil, scroll halaman Search tetap menggerakkan
-                            // navBarScroll padahal bar yang terlihat bukan GlassNavBar. Pulihkan
-                            // bentuk saat morph dibuka, supaya mini player tidak loncat ke inline.
-                            if (searchFromInline) navBarScroll.inline() else navBarScroll.expand()
-                        },
-                        query = query,
-                        onQueryChange = viewModel::onQueryChange,
-                        onSubmit = viewModel::submitSearch,
-                        focusRequester = searchFieldFocus,
-                        focusRequested = searchFocusRequested,
-                        onFocusHandled = { searchFocusRequested = false },
-                        onFocusChange = { searchFieldFocused = it },
-                        placeholder = org.jetbrains.compose.resources.stringResource(
-                            if (searchSource == SearchSource.LIBRARY) {
-                                SharedRes.string.search_library_hint
-                            } else if (searchSource == SearchSource.ADDONS) {
-                                SharedRes.string.search_addons_hint
-                            } else {
-                                SharedRes.string.search_hint
-                            },
-                        ),
-                        sourceLabels = listOf(
-                            stringResource(R.string.search_source_youtube),
-                            stringResource(R.string.library),
-                            stringResource(R.string.search_source_addons),
-                        ),
-                        sourceIndex = searchSource.ordinal,
-                        onSourceSelect = { index ->
-                            viewModel.setSearchSource(SearchSource.entries[index])
-                            if (query.isNotBlank()) viewModel.submitSearch()
-                        },
-                        onSourceMenu = { searchSourceMenu = it },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                } else if (glassActive) Column(
+                if (glassActive) Column(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .widthIn(max = FLOATING_BAR_MAX_WIDTH)
@@ -5070,8 +4775,7 @@ private fun MioriApp(
             val pageMenuUp =
                 (songActions != null && songMenuOrigin == null && !(menuFromPlayer && playerRaised)) ||
                     (browseActions != null && browseMenuOrigin == null && !browseRenameInSheet) ||
-                    songInfoTarget != null ||
-                    searchSourceMenu != null
+                    songInfoTarget != null
             LaunchedEffect(pageMenuUp, reduceDynamicBlur) {
                 if (pageMenuUp && !reduceDynamicBlur && isGlassSupported()) {
                     pageBackdrop.capture()
@@ -5722,41 +5426,6 @@ private fun MioriApp(
                 hazeState = hazeState,
             ) { song ->
                 songMenuBody(song)
-            }
-            // Menu sumber pencarian dari globe di bar kaca: sibling layar penuh di atas
-            // bar (bukan anak Column bar), frost dari still halaman seperti menu ⋯ lain.
-            IosMenuPopover(
-                item = searchSourceMenu,
-                anchor = searchSourceMenu?.anchor,
-                onDismiss = { searchSourceMenu?.onDismiss?.invoke() },
-                // Without liquid glass the page's haze does the frosting, as in
-                // the other non-glass panels; a recorded still would draw nothing.
-                backdrop = if (glassActive) pageBackdrop else null,
-                hazeState = hazeState,
-                placement = IosMenuPlacement.AboveStart,
-                dimBackground = false,
-                glassRim = true,
-                frostAlpha = 0.45f,
-                compact = true,
-            ) { request ->
-                request.entries.forEach { entry ->
-                    IosMenuRow(
-                        compact = true,
-                        label = entry.label,
-                        icon = entry.icon,
-                        onClick = entry.onClick,
-                        enabled = entry.enabled,
-                        labelColor = if (entry.selected) MaterialTheme.colorScheme.primary else null,
-                        trailing = if (entry.selected) ({
-                            Icon(
-                                imageVector = Icons.Rounded.Check,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }) else null,
-                    )
-                }
             }
             // A closed menu forgets where it was held and what it hung off, so
             // whatever opens it next starts from nothing.

@@ -2,24 +2,23 @@
 
 <br/>
 
-<a href="https://github.com/rezapranata089-bit/Miori/releases/latest"><img src=".github/assets/banner.svg" alt="Miori – A YouTube Music player for Android with an Apple Music–style interface" width="100%" /></a>
+<a href="https://github.com/t4ulquiorra/Miori/releases/latest"><img src=".github/assets/banner.svg" alt="Miori – A YouTube Music player for Android with an Apple Music–style interface" width="100%" /></a>
 
 <p>
-<a href="https://github.com/rezapranata089-bit/Miori/releases/latest"><img src="https://img.shields.io/github/v/release/rezapranata089-bit/Miori?style=flat-square&amp;labelColor=0d1117&amp;color=ff4d6d" alt="Latest release" /></a>
-<a href="https://github.com/rezapranata089-bit/Miori/releases"><img src="https://img.shields.io/github/downloads/rezapranata089-bit/Miori/total?style=flat-square&amp;labelColor=0d1117&amp;color=ff4d6d" alt="Downloads" /></a>
-<a href="LICENSE"><img src="https://img.shields.io/github/license/rezapranata089-bit/Miori?style=flat-square&amp;labelColor=0d1117&amp;color=ff4d6d" alt="License" /></a>
+<a href="https://github.com/t4ulquiorra/Miori/releases/latest"><img src="https://img.shields.io/github/v/release/t4ulquiorra/Miori?style=flat-square&amp;labelColor=0d1117&amp;color=ff4d6d" alt="Latest release" /></a>
+<a href="https://github.com/t4ulquiorra/Miori/releases"><img src="https://img.shields.io/github/downloads/t4ulquiorra/Miori/total?style=flat-square&amp;labelColor=0d1117&amp;color=ff4d6d" alt="Downloads" /></a>
+<a href="LICENSE"><img src="https://img.shields.io/github/license/t4ulquiorra/Miori?style=flat-square&amp;labelColor=0d1117&amp;color=ff4d6d" alt="License" /></a>
 <img src="https://img.shields.io/badge/Android-8.0%2B-ff4d6d?style=flat-square&amp;labelColor=0d1117" alt="Android 8.0+" />
-<a href="https://www.reddit.com/r/MioriMusic/s/gN6chb7onR"><img src="https://img.shields.io/badge/Reddit-r%2FMioriMusic-ff4d6d?style=flat-square&amp;logo=reddit&amp;logoColor=white&amp;labelColor=0d1117" alt="Reddit community" /></a>
 </p>
 
-<a href="https://github.com/rezapranata089-bit/Miori/releases/latest"><img src="https://img.shields.io/badge/Download%20the%20latest%20APK-ff4d6d?style=for-the-badge&amp;logo=android&amp;logoColor=white" alt="Download the latest APK" /></a>
+<a href="https://github.com/t4ulquiorra/Miori/releases/latest"><img src="https://img.shields.io/badge/Download%20the%20latest%20APK-ff4d6d?style=for-the-badge&amp;logo=android&amp;logoColor=white" alt="Download the latest APK" /></a>
 
 <p>
 <a href="#screenshots">Screenshots</a> ·
 <a href="#highlights">Highlights</a> ·
 <a href="#download">Download</a> ·
 <a href="#features">Features</a> ·
-<a href="#whats-different-from-miori">What's different</a> ·
+<a href="#whats-different-from-bitchord">What's different</a> ·
 <a href="#community">Community</a> ·
 <a href="#credits">Credits</a>
 </p>
@@ -71,7 +70,7 @@
 
 ## Download
 
-1. Open the [latest release](https://github.com/rezapranata089-bit/Miori/releases/latest).
+1. Open the [latest release](https://github.com/t4ulquiorra/Miori/releases/latest).
 2. Download the APK file.
 3. Open it and allow "Install unknown apps" if Android asks.
 
@@ -81,7 +80,7 @@
 | **Architecture** | arm64 |
 | **Updates** | Checked inside the app |
 
-Past versions and their changes are listed in [Releases](https://github.com/rezapranata089-bit/Miori/releases).
+Past versions and their changes are listed in [Releases](https://github.com/t4ulquiorra/Miori/releases).
 
 ---
 
@@ -142,21 +141,21 @@ Past versions and their changes are listed in [Releases](https://github.com/reza
 
 ---
 
-## What's different from Miori
+## What's different from BitChord
 
-Miori is my personal fork of [Miori](https://github.com/kushagrasinghx/Miori), rebuilt as an Android-only app with its own identity, interface and release pipeline.
+Miori is my personal fork of [BitChord](https://github.com/kushagrasinghx/BitChord), rebuilt as an Android-only app with its own identity, interface and release pipeline.
 
 ---
 
 ## Community
 
-Join the discussion, share feedback or ask for help on [r/MioriMusic](https://www.reddit.com/r/MioriMusic/s/gN6chb7onR). Bug reports and feature requests are still welcome as [GitHub issues](../../issues).
+Share feedback, ask questions, or report bugs in [GitHub Issues](../../issues).
 
 ---
 
 ## Credits
 
-Miori is built on top of [Miori](https://github.com/kushagrasinghx/Miori) by [kushagrasinghx](https://github.com/kushagrasinghx) and its contributors. Thank you for the foundation.
+Miori is built on top of [BitChord](https://github.com/kushagrasinghx/BitChord) by [kushagrasinghx](https://github.com/kushagrasinghx) and its contributors. Thank you for the foundation.
 
 - **LiquidFlow** lyric effect: inspired by [Mochy Music](https://github.com/realidkroo/Mochy-Music) by [realidkroo](https://github.com/realidkroo).
 

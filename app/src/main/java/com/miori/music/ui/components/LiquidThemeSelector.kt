@@ -347,8 +347,8 @@ fun LiquidSegmentedControl(
                     // membiaskan, salinan yang bergeser terlihat sebagai teks dan ikon dobel.
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && e > 0.02f) {
                         lens(
-                            refractionHeight = 12.dp.toPx() * e,
-                            refractionAmount = 14.dp.toPx() * e,
+                            refractionHeight = 10.dp.toPx() * e,
+                            refractionAmount = 12.dp.toPx() * e,
                             depthEffect = true,
                             chromaticAberration = e > 0.5f,
                         )
@@ -881,7 +881,7 @@ private fun liquidPillRect(
     return Rect(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f)
 }
 
-private val SELECTOR_HEIGHT = 50.dp
+private val SELECTOR_HEIGHT = 42.dp
 private val SELECTOR_INSET = 4.dp
 private val TRACK_FILL = Color(0xFF767680)
 private val FALLBACK_DARK_PILL = Color(0xFF636366)

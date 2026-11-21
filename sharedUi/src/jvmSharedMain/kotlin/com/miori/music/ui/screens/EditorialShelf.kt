@@ -120,7 +120,6 @@ private fun EditorialShelf(
         shelf.items.filter { it.isRelease() }.distinctBy { it.browseId }.take(EDITORIAL_MAX)
     }
     Column(Modifier.padding(bottom = 26.dp)) {
-        SectionHeader(title = shelf.title, subtitle = shelf.subtitle)
         BoxWithConstraints {
             // The next card peeks in at the edge, as on Apple's New tab.
             val cardWidth = maxWidth - PAGE_GUTTER - 36.dp

@@ -2075,7 +2075,7 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f),
                             shape = RoundedCornerShape(percent = 50),
                         )
-                        .clickable { context.openLink("https://saweria.co/Zeuxxi") }
+                        .clickable { context.openLink("https://github.com/t4ulquiorra") }
                         .padding(horizontal = 14.dp, vertical = 7.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -2114,7 +2114,7 @@ fun SettingsScreen(
                         color = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) Color.Black else Color.White,
                         textDecoration = TextDecoration.Underline,
                         modifier = Modifier.clickable {
-                            context.openLink("https://github.com/rezapranata089-bit/Miori")
+                            context.openLink("https://github.com/t4ulquiorra/Miori")
                         },
                     )
                     Text(
@@ -2123,30 +2123,34 @@ fun SettingsScreen(
                         color = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) Color.Black else Color.White,
                         textDecoration = TextDecoration.Underline,
                         modifier = Modifier.clickable {
-                            context.openLink("https://github.com/rezapranata089-bit")
+                            context.openLink("https://github.com/t4ulquiorra")
                         },
                     )
-                    Text(
-                        text = "Reddit",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) Color.Black else Color.White,
-                        textDecoration = TextDecoration.Underline,
-                        modifier = Modifier.clickable {
-                            context.openLink("https://www.reddit.com/r/MioriMusic/s/gN6chb7onR")
-                        },
-                    )
-                    Text(
-                        text = "Telegram",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) Color.Black else Color.White,
-                        textDecoration = TextDecoration.Underline,
-                        modifier = Modifier.clickable {
-                            context.openLink("https://t.me/+8ECIhA8_kdkwZWU1")
-                        },
-                    )
+                    if (COMMUNITY_REDDIT_URL.isNotBlank()) {
+                        Text(
+                            text = "Reddit",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) Color.Black else Color.White,
+                            textDecoration = TextDecoration.Underline,
+                            modifier = Modifier.clickable {
+                                context.openLink(COMMUNITY_REDDIT_URL)
+                            },
+                        )
+                    }
+                    if (COMMUNITY_TELEGRAM_URL.isNotBlank()) {
+                        Text(
+                            text = "Telegram",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) Color.Black else Color.White,
+                            textDecoration = TextDecoration.Underline,
+                            modifier = Modifier.clickable {
+                                context.openLink(COMMUNITY_TELEGRAM_URL)
+                            },
+                        )
+                    }
                 }
                 Text(
-                    text = "Made by Zeuxxi",
+                    text = "Made by t4ulquiorra",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 1.dp),
@@ -4192,5 +4196,7 @@ internal fun <T> ChoiceGroup(
                 }
             }
         }
-    }
 }
+
+private const val COMMUNITY_REDDIT_URL = ""
+private const val COMMUNITY_TELEGRAM_URL = ""

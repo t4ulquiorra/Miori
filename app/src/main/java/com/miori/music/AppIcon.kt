@@ -15,18 +15,17 @@ import android.content.pm.PackageManager
  * names so a choice made before the update stays enabled.
  */
 enum class AppIcon(val alias: String, val iconRes: Int, val labelRes: Int, val previewRes: Int? = null) {
-    Default("LauncherDefault", R.mipmap.ic_launcher, R.string.app_icon_default),
-    LiquidGlass(
-        "LauncherGlassLight",
-        R.mipmap.ic_liquid_glass,
-        R.string.app_icon_liquid_glass,
-        R.drawable.ic_miori_glass_foreground,
-    ),
     DarkGlass(
         "LauncherDarkGlass",
         R.mipmap.ic_dark_glass,
         R.string.app_icon_dark_glass,
         R.drawable.ic_miori_dark_glass_foreground,
+    ),
+    LiquidGlass(
+        "LauncherGlassLight",
+        R.mipmap.ic_liquid_glass,
+        R.string.app_icon_liquid_glass,
+        R.drawable.ic_miori_glass_foreground,
     );
 
     private fun component(context: Context) =
@@ -35,8 +34,8 @@ enum class AppIcon(val alias: String, val iconRes: Int, val labelRes: Int, val p
     companion object {
         /**
          * Icons that were removed leave no alias to enable. If one of them was
-         * the pick and Default had been switched off, no launcher entry would be
-         * left on the home screen: bring Default back.
+         * the pick and DarkGlass had been switched off, no launcher entry would be
+         * left on the home screen: bring DarkGlass back.
          */
         fun repairLauncher(context: Context) {
             val pm = context.packageManager
@@ -44,12 +43,14 @@ enum class AppIcon(val alias: String, val iconRes: Int, val labelRes: Int, val p
                 pm.getComponentEnabledSetting(it.component(context)) ==
                     PackageManager.COMPONENT_ENABLED_STATE_ENABLED
             }
-            val defaultOff = pm.getComponentEnabledSetting(Default.component(context)) in setOf(
+            val darkOff = pm.getComponentEnabledSetting(DarkGlass.component(context)) in setOf(
                 PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                 PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER,
                 PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED,
             )
-            if (!anyEnabled && defaultOff) apply(context, Default)
+            if (!anyEnabled || (darkOff && !entries.any { it != DarkGlass && pm.getComponentEnabledSetting(it.component(context)) == PackageManager.COMPONENT_ENABLED_STATE_ENABLED })) {
+                apply(context, DarkGlass)
+            }
         }
 
         fun current(context: Context): AppIcon {
@@ -57,7 +58,7 @@ enum class AppIcon(val alias: String, val iconRes: Int, val labelRes: Int, val p
             return entries.firstOrNull {
                 pm.getComponentEnabledSetting(it.component(context)) ==
                     PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-            } ?: Default
+            } ?: DarkGlass
         }
 
         /** Enables [icon] before disabling the rest so there is never a moment with no launcher entry. */
@@ -75,6 +76,14 @@ enum class AppIcon(val alias: String, val iconRes: Int, val labelRes: Int, val p
                     PackageManager.DONT_KILL_APP,
                 )
             }
+            try {
+                val legacyDefault = ComponentName(context.packageName, "com.miori.music.LauncherDefault")
+                pm.setComponentEnabledSetting(
+                    legacyDefault,
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                    PackageManager.DONT_KILL_APP,
+                )
+            } catch (_: Exception) {}
         }
     }
 }
