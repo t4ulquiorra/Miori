@@ -90,9 +90,5 @@
 -dontwarn io.github.muntashirakon.adb.**
 
 # ---- Player Screen optimization guards ----
-# Prevent R8 from inlining lambdas or over-optimizing massive player composables,
-# which triggers the D8/R8 phi register allocation bug (Imprecise Constant / VerifyError).
--keep class com.miori.music.ui.player.NowPlayingScreenKt { *; }
--noinlining class com.miori.music.ui.player.NowPlayingScreenKt { *; }
+# Keep player classes preserved
 -keep class com.miori.music.ui.player.** { *; }
--noinlining class com.miori.music.ui.player.** { *; }
