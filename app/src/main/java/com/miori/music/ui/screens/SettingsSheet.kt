@@ -1206,17 +1206,24 @@ fun SettingsScreen(
                                 .padding(vertical = 6.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            // Semua ikon (default dan glass) lewat mask adaptive sistem, sama
-                            // seperti yang dilihat di launcher.
-                            AndroidView(
-                                factory = { ctx ->
-                                    android.widget.ImageView(ctx).apply { setImageResource(option.iconRes) }
-                                },
-                                update = { view -> view.setImageResource(option.iconRes) },
-                                modifier = Modifier
-                                    .size(68.dp)
-                                    .clip(RoundedCornerShape(22.dp)),
-                            )
+                            val preview = option.previewRes
+                            if (preview != null) {
+                                Image(
+                                    painter = painterResource(preview),
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(68.dp)
+                                        .scale(1.5f),
+                                )
+                            } else {
+                                Image(
+                                    painter = painterResource(option.iconRes),
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(68.dp)
+                                        .clip(RoundedCornerShape(22.dp)),
+                                )
+                            }
                             Text(
                                 text = stringResource(option.labelRes),
                                 textAlign = TextAlign.Center,

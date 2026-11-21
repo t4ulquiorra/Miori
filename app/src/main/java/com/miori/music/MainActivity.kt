@@ -4178,8 +4178,10 @@ private fun MioriApp(
                         val header = list.layoutInfo.visibleItemsInfo
                             .firstOrNull { it.index == 0 }?.size?.toFloat()
                             ?: return@derivedStateOf 0f
-                        ((list.firstVisibleItemScrollOffset - header * fadeStart) /
-                            (header * fadeRamp)).coerceIn(0f, 1f)
+                        val denom = header * fadeRamp
+                        if (denom <= 0f) return@derivedStateOf 0f
+                        val raw = (list.firstVisibleItemScrollOffset - header * fadeStart) / denom
+                        if (raw.isNaN()) 0f else raw.coerceIn(0f, 1f)
                     }
                 }
                 if (reduceDynamicBlur || !glassActive || !progressiveBlur) {

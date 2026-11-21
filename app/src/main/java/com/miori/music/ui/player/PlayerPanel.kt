@@ -176,8 +176,8 @@ fun PlayerPanel(
                 // Not under a portrait player that is fully up: its own
                 // background is opaque, and a full-screen blend behind it
                 // would be paid on every frame for nothing anyone can see.
-                if (open > 0f && !(open >= 1f && dock.attached)) {
-                    drawRect(Color.Black.copy(alpha = scrimAlpha * open))
+                if (open > 0f && !(open >= 1f && dock.attached) && !open.isNaN()) {
+                    drawRect(Color.Black.copy(alpha = (scrimAlpha * open).coerceIn(0f, 1f)))
                 }
             },
     ) {
@@ -204,7 +204,8 @@ fun PlayerPanel(
                             alpha = if (dock == null || dock.attached) {
                                 1f
                             } else {
-                                (dock.openFraction() / rowUntil).coerceIn(0f, 1f)
+                                val f = dock.openFraction()
+                                if (f.isNaN() || rowUntil <= 0f) 1f else (f / rowUntil).coerceIn(0f, 1f)
                             }
                         },
                 ) { content() }
@@ -235,7 +236,8 @@ fun PlayerPanel(
                             .fillMaxWidth()
                             .height(rowHeight)
                             .graphicsLayer {
-                                alpha = (1f - dock.openFraction() / rowUntil).coerceIn(0f, 1f)
+                                val f = dock.openFraction()
+                                alpha = if (f.isNaN() || rowUntil <= 0f) 0f else (1f - f / rowUntil).coerceIn(0f, 1f)
                             },
                     )
                 }

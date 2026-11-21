@@ -57,6 +57,7 @@ class MioriApplication : Application(), SingletonImageLoader.Factory, Configurat
     @OptIn(UnstableApi::class)
     @kotlin.OptIn(ExperimentalComposeUiApi::class)
     override fun onCreate() {
+        installCrashLogger()
         super.onCreate()
         AppIcon.repairLauncher(this)
         // The player is drawn by the shared UI module; this is what it reads
@@ -331,6 +332,59 @@ class MioriApplication : Application(), SingletonImageLoader.Factory, Configurat
             secret = secret,
             sessionKey = sessionKey,
         )
+    }
+
+    private fun installCrashLogger() {
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val sw = java.io.StringWriter()
+                val pw = java.io.PrintWriter(sw)
+                throwable.printStackTrace(pw)
+                pw.flush()
+                val stackTrace = sw.toString()
+                val logContent = "=== MIORI CRASH REPORT ===\n" +
+                    "Time: ${java.util.Date()}\n" +
+                    "Thread: ${thread.name} (id=${thread.id})\n" +
+                    "Exception: ${throwable.javaClass.name}: ${throwable.message}\n" +
+                    "Stacktrace:\n$stackTrace\n"
+
+                android.util.Log.e("MioriCrash", logContent)
+
+                runCatching {
+                    java.io.File("/sdcard/Download/miori_crash.log").writeText(logContent)
+                }
+
+                runCatching {
+                    val dlDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                    if (dlDir != null && (dlDir.exists() || dlDir.mkdirs())) {
+                        java.io.File(dlDir, "miori_crash.log").writeText(logContent)
+                    }
+                }
+
+                runCatching {
+                    java.io.File(filesDir, "miori_crash.log").writeText(logContent)
+                }
+
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    runCatching {
+                        val values = android.content.ContentValues().apply {
+                            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "miori_crash.log")
+                            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                        }
+                        contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)?.let { uri ->
+                            contentResolver.openOutputStream(uri)?.use { out ->
+                                out.write(logContent.toByteArray())
+                            }
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
+            } finally {
+                defaultHandler?.uncaughtException(thread, throwable)
+            }
+        }
     }
 
     companion object {

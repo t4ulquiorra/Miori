@@ -246,13 +246,20 @@ class PlayerDock {
     }
 
     /** 0 on the pill (all glass), 1 once the plain panel has fully covered the glass. */
-    fun panelFill(until: Float = PANEL_FILL_UNTIL): Float = (openFraction() / until).coerceIn(0f, 1f)
+    fun panelFill(until: Float = PANEL_FILL_UNTIL): Float {
+        if (until <= 0f) return 1f
+        val open = openFraction()
+        if (open.isNaN()) return 0f
+        return (open / until).coerceIn(0f, 1f)
+    }
 
     /** The panel's corner radius this frame: the pill's, rounding off to square. */
     fun panelCornerPx(sheetCornerPx: Float = 0f): Float {
         val pill = miniPillInWindow() ?: return 0f
         if (pill.top <= 1f) return 0f
-        val progress = (1f - (offset() ?: 0f) / pill.top).coerceIn(0f, 1f)
+        val off = offset() ?: 0f
+        if (off.isNaN() || pill.top.isNaN()) return 0f
+        val progress = (1f - off / pill.top).coerceIn(0f, 1f)
         val pillCorner = pill.height / 2f * (1f - progress)
         // Seperti sheet Apple Music: sudut atas tetap membulat selagi panel
         // naik, baru rata di ujung ketika panel menutupi seluruh layar.
@@ -272,8 +279,9 @@ class PlayerDock {
     fun openFraction(): Float {
         val travel = travel()
         val offset = offset() ?: return 0f
-        if (travel <= 0f) return 0f
-        return (1f - offset / travel).coerceIn(0f, 1f)
+        if (travel <= 0f || travel.isNaN() || offset.isNaN()) return 0f
+        val raw = (1f - offset / travel)
+        return if (raw.isNaN()) 0f else raw.coerceIn(0f, 1f)
     }
 
     /**

@@ -375,7 +375,7 @@ class PlayerSheetMotion(
             // Critically damped never bounces from rest, but thrown hard
             // enough at its target it can pass it once: never past open or
             // past the bar.
-            held = value.coerceIn(0f, travel)
+            held = value.coerceIn(0f, travel.coerceAtLeast(0f))
         }
     }
 
